@@ -1,0 +1,5 @@
+FROM python:3.11.13-bookworm
+
+ENV PYTHONBUFFERED=1
+
+RUN pip install --no-cache-dir python-dotenv==1.1.1 confluent-kafka[avro]==2.11.0

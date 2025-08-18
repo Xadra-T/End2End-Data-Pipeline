@@ -1,0 +1,26 @@
+{
+  "name": "clickhouse-connect-sink-user-interactions",
+  "config": {
+    "connector.class": "com.clickhouse.kafka.connect.ClickHouseSinkConnector",
+    "tasks.max": "6",
+    "topics": "${KAFKA_TOPIC}",
+    "database": "${CLICKHOUSE_DB}",
+    "hostname": "${CLICKHOUSE_HOST}",
+    "port": "${CLICKHOUSE_PORT}",
+    "username": "${CLICKHOUSE_USER}",
+    "password": "${CLICKHOUSE_PASSWORD}",
+    "ssl": "false",
+    "key.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081",
+    "value.converter.schemas.enable": "true",
+    "errors.tolerance": "none",
+    "errors.log.enable": "true",
+    "errors.log.include.message": "true",
+    
+    "transforms": "castTimestamp",
+    "transforms.castTimestamp.type": "org.apache.kafka.connect.transforms.TimestampConverter${DOLLAR}Value",
+    "transforms.castTimestamp.target.type": "Timestamp",
+    "transforms.castTimestamp.field": "event_timestamp"
+  }
+}

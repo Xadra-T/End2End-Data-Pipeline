@@ -1,0 +1,397 @@
+x-airflow-common:
+  &airflow-common
+  build:
+      context: ./airflow
+      dockerfile: Dockerfile-Airflow
+  depends_on:
+    &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  env_file:
+    - ./tests/env-test/clickhouse.env
+    - ./tests/env-test/minio.env
+    - ./tests/env-test/minio.creds
+    - ./tests/env-test/spark.env
+  environment:
+    &airflow-common-env
+    AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    AIRFLOW_UID: ${AIRFLOW_UID}
+    AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: 'Asia/Tehran'
+    _PIP_ADDITIONAL_REQUIREMENTS: ''
+  image: lp/airflow
+  networks:
+      - airflow
+  user: "${AIRFLOW_UID}:0"
+  volumes:
+    - ./tests/airflow/config:/opt/airflow/config
+    - ./tests/airflow/dags:/opt/airflow/dags
+    - ./tests/airflow/logs:/opt/airflow/logs
+
+x-healthcheck:
+  healthcheck:
+    &healthcheck-common
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+services:
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+  
+  airflow-init:
+    <<: *airflow-common
+    command:
+      - -c
+      - |
+        if [[ -z "${AIRFLOW_UID}" ]]; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: AIRFLOW_UID not set!\e[0m"
+          echo "If you are on Linux, you SHOULD follow the instructions below to set "
+          echo "AIRFLOW_UID environment variable, otherwise files will be owned by root."
+          echo "For other operating systems you can get rid of the warning with manually created .env file:"
+          echo "    See: https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html#setting-the-right-airflow-user"
+          echo
+          export AIRFLOW_UID=$$(id -u)
+        fi
+        one_meg=1048576
+        mem_available=$$(($$(getconf _PHYS_PAGES) * $$(getconf PAGE_SIZE) / one_meg))
+        cpus_available=$$(grep -cE 'cpu[0-9]+' /proc/stat)
+        disk_available=$$(df / | tail -1 | awk '{print $$4}')
+        warning_resources="false"
+        if (( mem_available < 4000 )) ; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough memory available for Docker.\e[0m"
+          echo "At least 4GB of memory required. You have $$(numfmt --to iec $$((mem_available * one_meg)))"
+          echo
+          warning_resources="true"
+        fi
+        if (( cpus_available < 2 )); then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough CPUS available for Docker.\e[0m"
+          echo "At least 2 CPUs recommended. You have $${cpus_available}"
+          echo
+          warning_resources="true"
+        fi
+        if (( disk_available < one_meg * 10 )); then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough Disk space available for Docker.\e[0m"
+          echo "At least 10 GBs recommended. You have $$(numfmt --to iec $$((disk_available * 1024 )))"
+          echo
+          warning_resources="true"
+        fi
+        if [[ $${warning_resources} == "true" ]]; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: You have not enough resources to run Airflow (see above)!\e[0m"
+          echo "Please follow the instructions to increase amount of resources available:"
+          echo "   https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html#before-you-begin"
+          echo
+        fi
+        echo
+        echo "Creating missing opt dirs if missing:"
+        echo
+        mkdir -v -p /opt/airflow/{logs,dags,plugins,config}
+        mkdir /opt/airflow/logs/spark
+        echo
+        echo "Airflow version:"
+        /entrypoint airflow version
+        echo
+        echo "Files in shared volumes:"
+        echo
+        ls -la /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Running airflow config list to create default config file if missing."
+        echo
+        /entrypoint airflow config list >/dev/null
+        echo
+        echo "Files in shared volumes:"
+        echo
+        ls -la /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Change ownership of files in /opt/airflow to ${AIRFLOW_UID}:0"
+        echo
+        chown -R "${AIRFLOW_UID}:0" /opt/airflow/
+        echo
+        echo "Change ownership of files in shared volumes to ${AIRFLOW_UID}:0"
+        echo
+        chown -v -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Files in shared volumes:"
+        echo
+        ls -la /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Waiting for db to create ClickHouse and MinIO connections"
+        until airflow db check; do
+          >&2 echo "Airflow DB not reachable. Waiting..."
+          sleep 5
+        done
+        echo
+        echo "Add/Update ClickHouse connection"
+        airflow connections add "$CLICKHOUSE_CONN_NAME" \
+          --conn-uri "clickhouse://$CLICKHOUSE_USER:$CLICKHOUSE_PASSWORD@$CLICKHOUSE_HOST:$CLICKHOUSE_PORT/$CLICKHOUSE_DB"
+        echo
+        echo "Add/Update MinIO connection"
+        airflow connections add "$MINIO_CONN_NAME" \
+          --conn-type     'aws' \
+          --conn-login    "$MINIO_ROOT_USER" \
+          --conn-password "$MINIO_ROOT_PASSWORD" \
+          --conn-extra   '{"host": "http://minio:9000"}'
+        echo
+        echo "Add/Update Spark connection"
+        airflow connections add "$SPARK_CONN_NAME" \
+          --conn-type "spark" \
+          --conn-host "spark://spark-master" \
+          --conn-port "7077"
+        echo
+        echo "Done."
+        exit 0;
+    depends_on:
+      <<: *airflow-common-depends-on
+    entrypoint: /bin/bash
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
+      _PIP_ADDITIONAL_REQUIREMENTS: ''
+    user: "0:0"
+  
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+    restart: always
+  
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+    restart: always
+  
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+    restart: always
+  
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-apiserver:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"
+    healthcheck:
+      <<: *healthcheck-common
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+    restart: always
+    hostname: airflow-worker
+  
+  clickhouse:
+    env_file:
+      - ./tests/env-test/clickhouse.creds
+    healthcheck:
+      <<: *healthcheck-common
+      test:
+        - "CMD-SHELL"
+        - "clickhouse-client --user $${CLICKHOUSE_USER} --password $${CLICKHOUSE_PASSWORD} -q 'SELECT 1'"
+    hostname: clickhouse
+    image: clickhouse/clickhouse-server:25.6.3.116
+    networks:
+      - airflow
+    restart: always
+    volumes:
+      - ./tests/files/clickhouse_table_schema.sql:/docker-entrypoint-initdb.d/init.sql:ro
+  
+  dashboard-api:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile-Dashboard-api
+    command: ["uvicorn", "dashboard_api:app", "--host", "0.0.0.0", "--port", "8080"]
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
+    hostname: dashboard-api
+    image: lp/dashboard-api
+    networks:
+      - airflow
+    restart: always
+    volumes:
+      - ./dashboard/dashboard_api.py:/home/dashboard_api.py:ro
+    working_dir: /home
+  
+  minio:
+    command: server /data --console-address ":9001"
+    env_file:
+      - ./tests/env-test/minio.creds
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'mc', 'ready', 'local']
+    hostname: minio
+    image: minio/minio:RELEASE.2025-07-18T21-56-31Z
+    networks:
+      - airflow
+    restart: always
+  
+  minio-init:
+    command:
+      - -c
+      - |
+        # Although it is set to depend on minio, but it not guaranteed. So we have to do a short sleep
+        sleep 5
+        
+        echo "Setup alias for MinIO server"
+        mc alias set $$MINIO_CONN_NAME http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
+        
+        echo "Create the bucket if it doesn't exist"
+        mc mb $$MINIO_CONN_NAME/$$MINIO_BUCKET_NAME || true;
+        
+        exit 0;
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/bash
+    env_file:
+      - ./tests/env-test/minio.env
+      - ./tests/env-test/minio.creds
+    hostname: minio-init
+    image: minio/minio:RELEASE.2025-07-18T21-56-31Z
+    networks:
+      - airflow
+  
+  postgres:
+    env_file:
+      - ./tests/env-test/postgres.env
+      - ./tests/env-test/postgres.creds
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+    image: postgres:17.4-bookworm
+    networks:
+      - airflow
+    restart: always
+  
+  redis:
+    image: redis:7.2.10-bookworm
+    expose:
+      - 6379
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD", "redis-cli", "ping"]
+    networks:
+      - airflow
+    restart: always
+  
+  spark-master:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile-Spark
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host spark-master
+    depends_on:
+      - minio
+    hostname: spark-master
+    image: lp/spark
+    networks:
+      - airflow
+    restart: always
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+  
+  spark-worker:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile-Spark
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    env_file:
+      - ./tests/env-test/minio.env
+      - ./tests/env-test/minio.creds
+    environment:
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 1g
+    hostname: spark-worker
+    image: lp/spark
+    networks:
+      - airflow
+    restart: always
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+  
+  airflow-test-runner:
+    build:
+      context: ./airflow/
+      dockerfile: Dockerfile-Airflow-test
+    command: python -m pytest --disable-warnings
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    env_file:
+      - ./tests/env-test/clickhouse.creds
+      - ./tests/env-test/clickhouse.env
+      - ./tests/env-test/minio.creds
+      - ./tests/env-test/minio.env
+      - ./tests/env-test/spark.env
+    environment:
+      <<: *airflow-common-env
+    image: lp/test-airflow
+    networks:
+      - airflow
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/tests:/opt/airflow/dags/tests:ro
+      - ./tests/airflow/config:/opt/airflow/config
+      - ./tests/airflow/logs:/opt/airflow/logs
+    working_dir: /opt/airflow/dags
+
+networks:
+  airflow:
+    name: airflow

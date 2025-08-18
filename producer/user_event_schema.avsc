@@ -1,0 +1,31 @@
+{
+    "namespace": "com.ecommerce.events.v1",
+    "type": "record",
+    "name": "user_interactions",
+    "doc": "Defines a single user interaction event.",
+    "fields": [
+        {"name": "event_id", "type": "string", "logicalType": "uuid"},
+        {"name": "user_id", "type": "string", "logicalType": "uuid"},
+        {"name": "session_id", "type": "string", "logicalType": "uuid"},
+        {
+            "name": "event_type",
+            "type": {
+                "type": "enum",
+                "name": "EventType",
+                "symbols": ["VIEW_PRODUCT", "ADD_TO_CART", "CHECKOUT", "PAYMENT", "SEARCH"]
+            }
+        },
+        {"name": "event_timestamp", "type": "long", "logicalType": "timestamp-millis"},
+        {"name": "request_latency_ms", "type": "int"},
+        {
+            "name": "status",
+            "type": {
+                "type": "enum",
+                "name": "StatusType",
+                "symbols": ["SUCCESS", "ERROR"]
+            }
+        },
+        {"name": "error_code", "type": ["null", "int"], "default": null},
+        {"name": "product_id", "type": ["null", "int"], "default": null}
+    ]
+}

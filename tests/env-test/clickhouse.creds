@@ -1,0 +1,2 @@
+CLICKHOUSE_USER=default-test
+CLICKHOUSE_PASSWORD=password-test

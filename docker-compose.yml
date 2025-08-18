@@ -1,0 +1,638 @@
+x-airflow-common:
+  &airflow-common
+  build:
+      context: ./airflow
+      dockerfile: Dockerfile-Airflow
+  depends_on:
+    &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  env_file:
+    - ./env/clickhouse.env
+    - ./env/minio.env
+    - ./env/minio.creds
+    - ./env/spark.env
+  environment:
+    &airflow-common-env
+    AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    AIRFLOW_UID: ${AIRFLOW_UID}
+    AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: 'Asia/Tehran'
+    _PIP_ADDITIONAL_REQUIREMENTS: ''
+  image: lp/airflow
+  networks:
+      - lp
+  user: "${AIRFLOW_UID}:0"
+  volumes:
+    - ./airflow/config:/opt/airflow/config
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+
+x-healthcheck:
+  healthcheck:
+    &healthcheck-common
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+services:
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]  # Set by airflow docker-compose.yml
+      # test: ["CMD", "curl", "--fail", "http://localhost:8080/monitor/health"]  # https://airflow.apache.org/docs/apache-airflow/stable/stable-rest-api-ref.html
+    ports:
+      - "8080:8080"
+    restart: always
+  
+  airflow-init:
+    <<: *airflow-common
+    command:
+      - -c
+      - |
+        if [[ -z "${AIRFLOW_UID}" ]]; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: AIRFLOW_UID not set!\e[0m"
+          echo "If you are on Linux, you SHOULD follow the instructions below to set "
+          echo "AIRFLOW_UID environment variable, otherwise files will be owned by root."
+          echo "For other operating systems you can get rid of the warning with manually created .env file:"
+          echo "    See: https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html#setting-the-right-airflow-user"
+          echo
+          export AIRFLOW_UID=$$(id -u)
+        fi
+        one_meg=1048576
+        mem_available=$$(($$(getconf _PHYS_PAGES) * $$(getconf PAGE_SIZE) / one_meg))
+        cpus_available=$$(grep -cE 'cpu[0-9]+' /proc/stat)
+        disk_available=$$(df / | tail -1 | awk '{print $$4}')
+        warning_resources="false"
+        if (( mem_available < 4000 )) ; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough memory available for Docker.\e[0m"
+          echo "At least 4GB of memory required. You have $$(numfmt --to iec $$((mem_available * one_meg)))"
+          echo
+          warning_resources="true"
+        fi
+        if (( cpus_available < 2 )); then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough CPUS available for Docker.\e[0m"
+          echo "At least 2 CPUs recommended. You have $${cpus_available}"
+          echo
+          warning_resources="true"
+        fi
+        if (( disk_available < one_meg * 10 )); then
+          echo
+          echo -e "\033[1;33mWARNING!!!: Not enough Disk space available for Docker.\e[0m"
+          echo "At least 10 GBs recommended. You have $$(numfmt --to iec $$((disk_available * 1024 )))"
+          echo
+          warning_resources="true"
+        fi
+        if [[ $${warning_resources} == "true" ]]; then
+          echo
+          echo -e "\033[1;33mWARNING!!!: You have not enough resources to run Airflow (see above)!\e[0m"
+          echo "Please follow the instructions to increase amount of resources available:"
+          echo "   https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html#before-you-begin"
+          echo
+        fi
+        echo
+        echo "Creating missing opt dirs if missing:"
+        echo
+        mkdir -v -p /opt/airflow/{logs,dags,plugins,config}
+        mkdir /opt/airflow/logs/spark
+        echo
+        echo "Airflow version:"
+        /entrypoint airflow version
+        echo
+        echo "Files in shared volumes:"
+        echo
+        ls -la /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Running airflow config list to create default config file if missing."
+        echo
+        /entrypoint airflow config list >/dev/null
+        echo
+        echo "Files in shared volumes:"
+        echo
+        ls -la /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Change ownership of files in /opt/airflow to ${AIRFLOW_UID}:0"
+        echo
+        chown -R "${AIRFLOW_UID}:0" /opt/airflow/
+        echo
+        echo "Change ownership of files in shared volumes to ${AIRFLOW_UID}:0"
+        echo
+        chown -v -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Files in shared volumes:"
+        echo
+        ls -la /opt/airflow/{logs,dags,plugins,config}
+        echo
+        echo "Waiting for db to create ClickHouse and MinIO connections"
+        until airflow db check; do
+          >&2 echo "Airflow DB not reachable. Waiting..."
+          sleep 5
+        done
+        echo
+        echo "Add/Update ClickHouse connection"
+        airflow connections add "$CLICKHOUSE_CONN_NAME" \
+          --conn-uri "clickhouse://$CLICKHOUSE_USER:$CLICKHOUSE_PASSWORD@$CLICKHOUSE_HOST:$CLICKHOUSE_PORT/$CLICKHOUSE_DB"
+        echo
+        echo "Add/Update MinIO connection"
+        airflow connections add "$MINIO_CONN_NAME" \
+          --conn-type     'aws' \
+          --conn-login    "$MINIO_ROOT_USER" \
+          --conn-password "$MINIO_ROOT_PASSWORD" \
+          --conn-extra   '{"host": "http://minio:9000"}'
+        echo
+        echo "Add/Update Spark connection"
+        airflow connections add "$SPARK_CONN_NAME" \
+          --conn-type "spark" \
+          --conn-host "spark://spark-master" \
+          --conn-port "7077"
+        echo
+        echo "Done."
+        exit 0;
+    depends_on:
+      <<: *airflow-common-depends-on
+    entrypoint: /bin/bash
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
+      _PIP_ADDITIONAL_REQUIREMENTS: ''
+    user: "0:0"
+  
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+    restart: always
+  
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+    restart: always
+  
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-apiserver:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"
+    healthcheck:
+      <<: *healthcheck-common
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+    restart: always
+    hostname: airflow-worker
+  
+  broker:
+    env_file:
+      - ./env/kafka.env
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@broker:29093'
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_LISTENERS: 'PLAINTEXT://broker:29092,CONTROLLER://broker:29093,PLAINTEXT_HOST://0.0.0.0:9092'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LOG_DIRS: 'var/lib/kafka/data'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    image: confluentinc/cp-kafka:7.9.1-1-ubi8
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'kafka-broker-api-versions', '--bootstrap-server', 'broker:29092']
+    hostname: broker
+    networks:
+      - lp
+    restart: always
+    volumes:
+      - broker:/var/lib/kafka/data
+  
+  broker-helper:
+    command:
+      - -c
+      - |
+        echo "Waiting for broker..."
+        until kafka-topics --bootstrap-server broker:29092 --list; do sleep 2; done
+        echo "broker available. Checking $${KAFKA_TOPIC} topic..."
+        if kafka-topics --bootstrap-server broker:29092 --list | grep -q "^$${KAFKA_TOPIC}$$"; then
+          echo "Topic exists. Checking partitions count..."
+          TOPIC_INFO=$$(kafka-topics --bootstrap-server broker:29092 --describe --topic $${KAFKA_TOPIC})
+          PARTITION_COUNT=$$(echo \"$$TOPIC_INFO\" | grep -oE "PartitionCount: [0-9]+" | awk "{print $$2}")
+          echo \"Current partition count: $$PARTITION_COUNT\"
+          if [ \"$$PARTITION_COUNT\" != \"6\" ]; then
+            echo "Changing partition count to 6..."
+            kafka-topics --bootstrap-server broker:29092 --alter --topic $${KAFKA_TOPIC} --partitions 6
+            echo "Partition count updated to 6"
+          else
+            echo "Partition count is already 6"
+          fi
+        else
+          echo "Creating $${KAFKA_TOPIC} topic with 6 partitions..."
+          kafka-topics --bootstrap-server broker:29092 --create --topic $${KAFKA_TOPIC} --partitions 6 --replication-factor 1
+        fi
+        echo "Topic info:"
+        kafka-topics --bootstrap-server broker:29092 --describe --topic $${KAFKA_TOPIC}
+        echo "Done"
+        exit 0;
+    entrypoint: /bin/bash
+    env_file:
+      - ./env/kafka.env
+    depends_on:
+      broker:
+        condition: service_healthy
+    image: confluentinc/cp-kafka:7.9.1-1-ubi8
+    networks:
+      - lp
+  
+  clickhouse:
+    env_file:
+      - ./env/clickhouse.creds
+    healthcheck:
+      <<: *healthcheck-common
+      test:
+        - "CMD-SHELL"
+        - "clickhouse-client --user $${CLICKHOUSE_USER} --password $${CLICKHOUSE_PASSWORD} -q 'SELECT 1'"
+    hostname: clickhouse
+    image: clickhouse/clickhouse-server:25.6.3.116
+    networks:
+      - lp
+    ports:
+      - '8123:8123'
+    restart: always
+    volumes:
+      - ./db/clickhouse_table_schema.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - clickhouse:/var/lib/clickhouse/
+  
+  connect:
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: 'PLAINTEXT://broker:29092'
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: 'clickhouse-connect-group'
+      CONNECT_CONFIG_STORAGE_TOPIC: '_connect-configs'
+      CONNECT_OFFSET_STORAGE_TOPIC: '_connect-offsets'
+      CONNECT_STATUS_STORAGE_TOPIC: '_connect-status'
+      CONNECT_REPLICATION_FACTOR: 1
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: 'org.apache.kafka.connect.converters.ByteArrayConverter'
+      CONNECT_VALUE_CONVERTER: 'io.confluent.connect.avro.AvroConverter'
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_VALUE_CONVERTER_SCHEMA_ENABLE: 'true'
+      CONNECT_PLUGIN_PATH: '/usr/share/java/clickhouse'
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'curl', '-f', 'http://localhost:8083/connectors']
+    hostname: connect
+    image: confluentinc/cp-kafka-connect:7.9.1-1-ubi8.amd64
+    networks:
+      - lp
+    restart: always
+    volumes:
+      - ./kafka/connectors:/usr/share/java/clickhouse:ro
+  
+  connect-helper:
+    build:
+      context: ./kafka
+      dockerfile: Dockerfile-Connect-helper
+    command:
+      - -c
+      - |
+        # Exit immediately if a command exits with a non-zero status.
+        set -e
+        echo "--- Verifying Environment Variables ---"
+        printenv | grep CLICKHOUSE || echo "CLICKHOUSE variables not found!"
+        echo "-------------------------------------"
+        
+        # Read secrets into env vars
+        export CLICKHOUSE_USER
+        export CLICKHOUSE_PASSWORD
+        export CLICKHOUSE_HOST
+        export CLICKHOUSE_PORT
+        export CLICKHOUSE_DB
+        export KAFKA_TOPIC
+        export DOLLAR="$"
+        
+        # Prepare a temporary config file with substituted variables
+        CONNECTOR_CONFIG_FILE="/tmp/config.json"
+        envsubst < /home/clickhouse_connector_configuration.json > "$${CONNECTOR_CONFIG_FILE}"
+        echo "--- Generated Connector Configuration ---"
+        cat "$${CONNECTOR_CONFIG_FILE}"
+        echo "---------------------------------------"
+        
+        CONNECT_HOST="$${CONNECT_HOST:-connect}"
+        CONNECT_PORT="$${CONNECT_PORT:-8083}"
+        CONNECT_URL="http://$${CONNECT_HOST}:$${CONNECT_PORT}/connectors"
+        echo "$${CONNECT_URL}"
+        echo "Waiting for Kafka Connect to be available at $${CONNECT_URL}..."
+        # Use a loop to check if the Connect REST API is up and running.
+        # The -f flag makes curl fail silently on server errors.
+        until $$(curl -s -f -o /dev/null $${CONNECT_URL}); do
+            sleep 2
+        done
+        echo "Kafka Connect is available. Checking if the configuration is already applied..."
+        CONNECTOR_NAME=$$(jq -r .name "$${CONNECTOR_CONFIG_FILE}")
+        if curl -s -f "http://$${CONNECT_HOST}:$${CONNECT_PORT}/connectors/$${CONNECTOR_NAME}/status" > /dev/null; then
+            echo "Connector '$$CONNECTOR_NAME' already configured. No further action needed."
+        else
+            echo "Connector '$$CONNECTOR_NAME' is NOT applied. Configuring the ClickHouse sink connector..."
+            HTTP_CODE=$$(curl -s -o response.txt -w "%{http_code}" -X POST -H "Content-Type:application/json" --data "@$${CONNECTOR_CONFIG_FILE}" "$${CONNECT_URL}")
+            if [ "$$HTTP_CODE" -eq 200 ] || [ "$$HTTP_CODE" -eq 201 ]; then
+                echo "ClickHouse sink connector configured."
+            else
+                echo "Failed to configure clickhouse sink connector."
+                cat response.txt
+                exit 1
+            fi
+        fi
+        exit 0
+    depends_on:
+      connect:
+        condition: service_healthy
+      broker-helper:
+        condition: service_completed_successfully
+    entrypoint: /bin/bash
+    env_file:
+      - ./env/clickhouse.env
+      - ./env/clickhouse.creds
+      - ./env/kafka.env
+    image: lp/connect-helper
+    networks:
+      - lp
+    volumes:
+      - ./kafka/clickhouse_connector_configuration.json:/home/clickhouse_connector_configuration.json:ro
+  
+  consumer:  # This is just for debugging
+    command:
+      - -c
+      - |
+        echo "Starting Kafka Consumer..."
+        kafka-console-consumer --bootstrap-server broker:29092 --topic $${KAFKA_TOPIC} --from-beginning
+    depends_on:
+      - broker
+    entrypoint: /bin/bash
+    env_file:
+      - ./env/kafka.env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: 'PLAINTEXT://broker:29092'
+      KAFKA_GROUP_ID: my-debug-consumer-group
+      KAFKA_AUTO_OFFSET_RESET: earliest
+      KAFKA_ENABLE_AUTO_COMMIT: 'true'
+    image: confluentinc/cp-kafka:7.9.1-1-ubi8
+    networks:
+      - lp
+    profiles:
+      - debug
+  
+  dashboard-api:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile-Dashboard-api
+    command: ["uvicorn", "dashboard_api:app", "--host", "0.0.0.0", "--port", "8080"]
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
+    hostname: dashboard-api
+    image: lp/dashboard-api
+    networks:
+      - lp
+    restart: always
+    volumes:
+      - ./dashboard/dashboard_api.py:/home/dashboard_api.py:ro
+    working_dir: /home
+  
+  dashboard-ui:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile-Dashboard-ui
+    command: ["streamlit", "run", "dashboard_ui.py", \
+              "--server.address", "0.0.0.0", \
+              "--server.port", "8501", \
+              "--server.headless", "true", \
+              "--server.fileWatcherType", "none", \
+              "--browser.gatherUsageStats", "false"]
+    environment:
+      REPORTS_URL: http://dashboard-api:8080/report
+    hostname: dashboard-ui
+    image: lp/dashboard-ui
+    networks:
+      - lp
+    ports:
+      - "8501:8501"
+    restart: always
+    volumes:
+      - ./dashboard/dashboard_ui.py:/home/dashboard_ui.py:ro
+    working_dir: /home
+  
+  minio:
+    command: server /data --console-address ":9001"
+    env_file:
+      - ./env/minio.creds
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'mc', 'ready', 'local']
+    hostname: minio
+    image: minio/minio:RELEASE.2025-07-18T21-56-31Z
+    networks:
+      - lp
+    restart: always
+    volumes:
+      - minio:/data
+  
+  minio-init:
+    command:
+      - -c
+      - |
+        # Although it depends on minio, but it not guaranteed. So we have to do manuall wating.
+        sleep 5
+        
+        echo "Setup alias for MinIO server"
+        mc alias set $$MINIO_CONN_NAME http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
+        
+        echo "Create the bucket if it doesn't exist"
+        mc mb $$MINIO_CONN_NAME/$$MINIO_BUCKET_NAME || true;
+        
+        exit 0;
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/bash
+    env_file:
+      - ./env/minio.env
+      - ./env/minio.creds
+    hostname: minio-init
+    image: minio/minio:RELEASE.2025-07-18T21-56-31Z
+    networks:
+      - lp
+  
+  postgres:
+    env_file:
+      - ./env/postgres.env
+      - ./env/postgres.creds
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD", "pg_isready", "-U", "$${POSTGRES_USER}"]
+    image: postgres:17.4-bookworm
+    networks:
+      - lp
+    restart: always
+    volumes:
+      - postgres:/var/lib/postgresql/data
+  
+  producer:
+    build:
+      context: ./producer
+      dockerfile: Dockerfile-Producer
+    command: ["python", "producer.py"]
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    env_file:
+      - ./env/kafka.env
+    image: lp/producer
+    networks:
+      - lp
+    restart: always
+    volumes:
+      - ./producer:/home/app
+    working_dir: /home/app
+  
+  redis:
+    image: redis:7.2.10-bookworm
+    expose:
+      - 6379
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD", "redis-cli", "ping"]
+    networks:
+      - lp
+    restart: always
+  
+  schema-registry:
+    depends_on:
+      broker:
+        condition: service_started
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: 'http://0.0.0.0:8081'
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'PLAINTEXT://broker:29092'
+    hostname: schema-registry
+    image: confluentinc/cp-schema-registry:7.9.1-1-ubi8.amd64
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+    networks:
+      - lp
+    restart: always
+  
+  spark-master:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile-Spark
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host spark-master
+    depends_on:
+      - minio
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080']
+    hostname: spark-master
+    image: lp/spark
+    networks:
+      - lp
+    ports:
+      - "8182:8080"
+    restart: always
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+  
+  spark-worker:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile-Spark
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    env_file:
+      - ./env/minio.env
+      - ./env/minio.creds
+    environment:
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 1g
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'curl', '-f', 'http://localhost:8081']
+    hostname: spark-worker
+    image: lp/spark
+    networks:
+      - lp
+    ports:
+      - "8183:8081"
+    restart: always
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+
+networks:
+  lp:
+    name: lp
+
+volumes:
+  broker:
+  clickhouse:
+  minio:
+  postgres:

@@ -1,0 +1,202 @@
+x-healthcheck:
+  healthcheck:
+    &healthcheck-common
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+services:
+  broker:
+    env_file:
+      - ./tests/env-test/kafka.env
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@broker:29093'
+      KAFKA_LISTENERS: 'PLAINTEXT://broker:29092,CONTROLLER://broker:29093,PLAINTEXT_HOST://0.0.0.0:9092'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LOG_DIRS: 'var/lib/kafka/data'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    image: confluentinc/cp-kafka:7.9.1-1-ubi8
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'kafka-broker-api-versions', '--bootstrap-server', 'broker:29092']
+    hostname: broker
+    networks:
+      - producer
+    restart: always
+  
+  clickhouse:
+    env_file:
+      - ./tests/env-test/clickhouse.creds
+    healthcheck:
+      <<: *healthcheck-common
+      test:
+        - "CMD-SHELL"
+        - "clickhouse-client --user $${CLICKHOUSE_USER} --password $${CLICKHOUSE_PASSWORD} -q 'SELECT 1'"
+    hostname: clickhouse
+    image: clickhouse/clickhouse-server:25.6.3.116
+    networks:
+      - producer
+    restart: always
+    volumes:
+      - ./tests/files/clickhouse_table_schema.sql:/docker-entrypoint-initdb.d/init.sql:ro
+  
+  connect:
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: 'PLAINTEXT://broker:29092'
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: 'clickhouse-connect-group'
+      CONNECT_CONFIG_STORAGE_TOPIC: '_connect-configs'
+      CONNECT_OFFSET_STORAGE_TOPIC: '_connect-offsets'
+      CONNECT_STATUS_STORAGE_TOPIC: '_connect-status'
+      CONNECT_REPLICATION_FACTOR: 1
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: 'org.apache.kafka.connect.converters.ByteArrayConverter'
+      CONNECT_VALUE_CONVERTER: 'io.confluent.connect.avro.AvroConverter'
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_VALUE_CONVERTER_SCHEMA_ENABLE: 'true'
+      CONNECT_PLUGIN_PATH: '/usr/share/java/clickhouse'
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'curl', '-f', 'http://localhost:8083/connectors']
+    hostname: connect
+    image: confluentinc/cp-kafka-connect:7.9.1-1-ubi8.amd64
+    networks:
+      - producer
+    restart: always
+    volumes:
+      - ./kafka/connectors:/usr/share/java/clickhouse:ro
+  
+  connect-helper:
+    build:
+      context: ./kafka
+      dockerfile: Dockerfile-Connect-helper
+    command:
+      - -c
+      - |
+        # Exit immediately if a command exits with a non-zero status.
+        set -e
+        echo "--- Verifying Environment Variables ---"
+        printenv | grep CLICKHOUSE || echo "CLICKHOUSE variables not found!"
+        echo "-------------------------------------"
+        
+        # Read secrets into env vars
+        export CLICKHOUSE_USER
+        export CLICKHOUSE_PASSWORD
+        export CLICKHOUSE_HOST
+        export CLICKHOUSE_PORT
+        export CLICKHOUSE_DB
+        export KAFKA_TOPIC
+        export DOLLAR="$"
+        
+        # Prepare a temporary config file with substituted variables
+        CONNECTOR_CONFIG_FILE="/tmp/config.json"
+        envsubst < /home/clickhouse_connector_configuration.json > "$${CONNECTOR_CONFIG_FILE}"
+        echo "--- Generated Connector Configuration ---"
+        cat "$${CONNECTOR_CONFIG_FILE}"
+        echo "---------------------------------------"
+        
+        CONNECT_HOST="$${CONNECT_HOST:-connect}"
+        CONNECT_PORT="$${CONNECT_PORT:-8083}"
+        CONNECT_URL="http://$${CONNECT_HOST}:$${CONNECT_PORT}/connectors"
+        echo "$${CONNECT_URL}"
+        echo "Waiting for Kafka Connect to be available at $${CONNECT_URL}..."
+        # Use a loop to check if the Connect REST API is up and running.
+        # The -f flag makes curl fail silently on server errors.
+        until $$(curl -s -f -o /dev/null $${CONNECT_URL}); do
+            sleep 2
+        done
+        echo "Kafka Connect is available. Checking if the configuration is already applied..."
+        CONNECTOR_NAME=$$(jq -r .name "$${CONNECTOR_CONFIG_FILE}")
+        if curl -s -f "http://$${CONNECT_HOST}:$${CONNECT_PORT}/connectors/$${CONNECTOR_NAME}/status" > /dev/null; then
+            echo "Connector '$$CONNECTOR_NAME' already configured. No further action needed."
+        else
+            echo "Connector '$$CONNECTOR_NAME' is NOT applied. Configuring the ClickHouse sink connector..."
+            HTTP_CODE=$$(curl -s -o response.txt -w "%{http_code}" -X POST -H "Content-Type:application/json" --data "@$${CONNECTOR_CONFIG_FILE}" "$${CONNECT_URL}")
+            if [ "$$HTTP_CODE" -eq 200 ] || [ "$$HTTP_CODE" -eq 201 ]; then
+                echo "ClickHouse sink connector configured."
+            else
+                echo "Failed to configure clickhouse sink connector."
+                cat response.txt
+                exit 1
+            fi
+        fi
+        exit 0
+    depends_on:
+      connect:
+        condition: service_healthy
+    entrypoint: /bin/bash
+    env_file:
+      - ./tests/env-test/clickhouse.env
+      - ./tests/env-test/clickhouse.creds
+      - ./tests/env-test/kafka.env
+    image: lp/connect-helper
+    networks:
+      - producer
+    volumes:
+      - ./kafka/clickhouse_connector_configuration.json:/home/clickhouse_connector_configuration.json:ro
+  
+  schema-registry:
+    depends_on:
+      broker:
+        condition: service_started
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: 'http://0.0.0.0:8081'
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'PLAINTEXT://broker:29092'
+    hostname: schema-registry
+    image: confluentinc/cp-schema-registry:7.9.1-1-ubi8.amd64
+    healthcheck:
+      <<: *healthcheck-common
+      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+    networks:
+      - producer
+    restart: always
+  
+  producer-test-runner:
+    build:
+      context: ./producer
+      dockerfile: Dockerfile-Producer-test
+    command: python -m pytest --disable-warnings
+    depends_on:
+      broker:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      connect-helper:
+        condition: service_completed_successfully
+      schema-registry:
+        condition: service_healthy
+    env_file:
+      - ./tests/env-test/kafka.env
+      - ./tests/env-test/clickhouse.env
+      - ./tests/env-test/clickhouse.creds
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: 'broker:29092'
+      SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+    image: lp/test-producer
+    networks:
+      - producer
+    volumes:
+      - ./producer:/home/app:ro
+    working_dir: /home/app
+
+networks:
+  producer:

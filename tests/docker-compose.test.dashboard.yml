@@ -1,0 +1,60 @@
+x-healthcheck:
+  healthcheck:
+    &healthcheck-common
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+services:
+  dashboard-api:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile-Dashboard-api
+    command: ["uvicorn", "dashboard_api:app", "--host", "0.0.0.0", "--port", "8080"]
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
+    hostname: dashboard-api
+    image: lp/dashboard-api
+    networks:
+      - dashboard
+    restart: always
+    volumes:
+      - ./dashboard/dashboard_api.py:/home/dashboard_api.py:ro
+    working_dir: /home
+  
+  dashboard-api-test-runner:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile-Dashboard-api-test
+    command: python -m pytest -v --disable-warnings tests/test_unit_api.py tests/test_integration_api.py
+    depends_on:
+      dashboard-api:
+        condition: service_healthy
+    environment:
+      REPORTS_URL: http://dashboard-api:8080/report
+    image: lp/test-dashboard-api
+    hostname: dashboard-api-test
+    networks:
+      - dashboard
+    volumes:
+      - ./dashboard:/home:ro
+    working_dir: /home
+  
+  dashboard-ui-test-runner:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile-Dashboard-ui-test
+    command: python -m pytest -v --disable-warnings tests/test_unit_ui.py
+    image: lp/test-dashboard-ui
+    hostname: dashboard-ui-test
+    networks:
+      - dashboard
+    volumes:
+      - ./dashboard:/home:ro
+    working_dir: /home
+
+networks:
+  dashboard:
+    name: dashboard

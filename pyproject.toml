@@ -1,0 +1,3 @@
+[tool.ruff.per-file-ignores]
+'test_*.py' = ['ANN001', 'ANN002', 'ANN003', 'ANN202', 'ANN201', 'ARG001', 'ARG005', 'BLE001', 'DOC201', 'INP001', 'N802', 'PLR2004', 'S101', 'S105', 'S106', 'S608']
+'*.py' = ["INP001"]

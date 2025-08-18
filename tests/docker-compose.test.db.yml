@@ -1,0 +1,94 @@
+x-healthcheck:
+  healthcheck:
+    &healthcheck-common
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+services:
+  clickhouse:
+    env_file:
+      - ./tests/env-test/clickhouse.creds
+    healthcheck:
+      <<: *healthcheck-common
+      test:
+        - "CMD-SHELL"
+        - "clickhouse-client --user $${CLICKHOUSE_USER} --password $${CLICKHOUSE_PASSWORD} -q 'SELECT 1'"
+    hostname: clickhouse
+    image: clickhouse/clickhouse-server:25.6.3.116
+    networks:
+      - db
+    ports:
+      - '8123:8123'
+    restart: always
+    volumes:
+      - ./tests/files/clickhouse_table_schema.sql:/docker-entrypoint-initdb.d/init.sql:ro
+  
+  minio:
+    command: server /data --console-address ":9001"
+    env_file:
+      - ./tests/env-test/minio.creds
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'mc', 'ready', 'local']
+    hostname: minio
+    image: minio/minio:RELEASE.2025-07-18T21-56-31Z
+    networks:
+      - db
+    restart: always
+  
+  minio-init:
+    command:
+      - -c
+      - |
+        # Although it depends on minio, but it not guaranteed. So we have to do a short sleep
+        sleep 5
+        
+        echo "Setup alias for MinIO server"
+        mc alias set minio_connection http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
+        
+        echo "Create the bucket if it doesn't exist"
+        mc mb minio_connection/$$MINIO_BUCKET_NAME || true;
+        
+        exit 0;
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/bash
+    env_file:
+      - ./tests/env-test/minio.env
+      - ./tests/env-test/minio.creds
+    hostname: minio-init
+    image: minio/minio:RELEASE.2025-07-18T21-56-31Z
+    networks:
+      - db
+  
+  db-test-runner:
+    build:
+      context: ./db
+      dockerfile: Dockerfile-DB-test
+    command: python -m pytest -v -W "ignore::pytest.PytestCacheWarning"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    env_file:
+      - ./tests/env-test/clickhouse.creds
+      - ./tests/env-test/clickhouse.env
+      - ./tests/env-test/minio.creds
+      - ./tests/env-test/minio.env
+      - ./tests/env-test/clickhouse.env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: 'broker:29092'
+      SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+    image: lp/test-db
+    networks:
+      - db
+    volumes:
+      - ./db:/home/app:ro
+    working_dir: /home/app
+
+networks:
+  db:

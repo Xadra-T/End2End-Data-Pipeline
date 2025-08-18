@@ -1,0 +1,7 @@
+FROM lp/spark:latest
+
+USER root
+
+RUN pip install --no-cache-dir pytest==8.3.5 pytest-mock==3.14.1
+
+USER spark

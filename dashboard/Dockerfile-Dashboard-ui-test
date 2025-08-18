@@ -1,0 +1,3 @@
+FROM lp/dashboard-ui:latest
+
+RUN pip install pytest==8.4.1 pytest-mock==3.14.1

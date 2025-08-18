@@ -1,0 +1,121 @@
+x-healthcheck:
+  healthcheck:
+    &healthcheck-common
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+services:
+  minio:
+    command: server /data --console-address ":9001"
+    env_file:
+      - ./tests/env-test/minio.creds
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'mc', 'ready', 'local']
+    hostname: minio
+    image: minio/minio:RELEASE.2025-07-18T21-56-31Z
+    networks:
+      - airflow
+    restart: always
+  
+  minio-init:
+    command:
+      - -c
+      - |
+        # Although it is set to depend on minio, but it not guaranteed. So we have to do a short sleep
+        sleep 5
+        
+        echo "Setup alias for MinIO server"
+        mc alias set $$MINIO_CONN_NAME http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
+        
+        echo "Create the bucket if it doesn't exist"
+        mc mb $$MINIO_CONN_NAME/$$MINIO_BUCKET_NAME || true;
+        
+        exit 0;
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/bash
+    env_file:
+      - ./tests/env-test/minio.env
+      - ./tests/env-test/minio.creds
+    hostname: minio-init
+    image: minio/minio:RELEASE.2025-07-18T21-56-31Z
+    networks:
+      - airflow
+  
+  spark-master:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile-Spark
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host spark-master
+    depends_on:
+      - minio
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080']
+    hostname: spark-master
+    image: lp/spark
+    networks:
+      - airflow
+    restart: always
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+  
+  spark-worker:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile-Spark
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    env_file:
+      - ./tests/env-test/minio.env
+      - ./tests/env-test/minio.creds
+    environment:
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 1g
+    healthcheck:
+      <<: *healthcheck-common
+      test: ['CMD', 'curl', '-f', 'http://localhost:8081']
+    hostname: spark-worker
+    image: lp/spark
+    networks:
+      - airflow
+    restart: always
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+  
+  spark-test-runner:
+    build:
+      context: ./spark/
+      dockerfile: Dockerfile-Spark-test
+    command: python3 -m pytest --disable-warnings
+    depends_on:
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      spark-master:
+        condition: service_healthy
+      spark-worker:
+        condition: service_healthy
+    env_file:
+      - ./tests/env-test/clickhouse.creds
+      - ./tests/env-test/clickhouse.env
+      - ./tests/env-test/minio.creds
+      - ./tests/env-test/minio.env
+      - ./tests/env-test/spark.env
+    image: lp/test-spark
+    networks:
+      - airflow
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./spark/tests:/opt/airflow/dags/tests:ro
+    working_dir: /opt/airflow/dags
+
+networks:
+  airflow:
+    name: airflow
