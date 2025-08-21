@@ -6,15 +6,13 @@ from uuid import UUID
 import pytest
 from confluent_kafka.error import KafkaException, ValueSerializationError
 
-from config import EVENT_INTERVAL_SECONDS, KAFKA_TOPIC
+from config import EVENT_INTERVAL_SECONDS, KAFKA_TOPIC, Events, Status
+from custom_types import Event
 from producer import delivery_report, generate_event, worker
 from schema_registry import uuid_serializer
 
 
-COLUMNS = [
-    'event_id', 'user_id', 'session_id', 'event_type', 'event_timestamp',
-    'request_latency_ms', 'status', 'error_code', 'product_id'
-]
+COLUMNS = Event.__annotations__.keys()
 
 
 def test_generate_event_with_productid_relevant_eventtype_no_error(mocker):
@@ -32,20 +30,20 @@ def test_generate_event_with_productid_relevant_eventtype_no_error(mocker):
     event = generate_event(user_id, session_id)
     
     assert isinstance(event, dict)
-    assert list(event.keys()) == COLUMNS
+    assert event.keys() == COLUMNS
     assert event['user_id'] == str(user_id)
     assert event['session_id'] == str(session_id)
     assert event['event_type'] == event_type
     assert event['event_timestamp'] == epoch * 1000
     assert event['request_latency_ms'] == radnint
-    assert event['status'] == 'SUCCESS'
+    assert event['status'] == Status.SUCCESS
     assert event['error_code'] is None
     assert event['product_id'] == radnint
 
 
 def test_generate_event_without_productid_nonrelevant_eventtype_no_error(mocker):
     """Test that generate_event produces a dictionary that doesn't have product_id with non-relevant event_type and no error."""
-    event_type = 'SEARCH'
+    event_type = Events.SEARCH
     mocker.patch('random.choice', return_value=event_type)
     mocker.patch('random.random', return_value=1)
     user_id = uuid.uuid4()
@@ -54,9 +52,9 @@ def test_generate_event_without_productid_nonrelevant_eventtype_no_error(mocker)
     event = generate_event(user_id, session_id)
     
     assert isinstance(event, dict)
-    assert list(event.keys()) == COLUMNS
+    assert event.keys() == COLUMNS
     assert event['event_type'] == event_type
-    assert event['status'] == 'SUCCESS'
+    assert event['status'] == Status.SUCCESS
     assert event['error_code'] is None
     assert event['product_id'] is None
 
@@ -64,7 +62,7 @@ def test_generate_event_without_productid_nonrelevant_eventtype_no_error(mocker)
 def test_generate_event_without_productid_relevant_eventtype_error(mocker):
     """Test that generate_event produces a dictionary that has product_id with relevant event_type and has error."""
     error_code = 503
-    event_type = 'VIEW_PRODUCT'
+    event_type = Events.VIEW_PRODUCT
     latency = 100
     product_id = 1000
     mocker.patch('random.choice', return_value=event_type)
@@ -73,8 +71,8 @@ def test_generate_event_without_productid_relevant_eventtype_error(mocker):
     
     event = generate_event(uuid.uuid4(), uuid.uuid4())
     
-    assert event['event_type'] == 'VIEW_PRODUCT'
-    assert event['status'] == 'ERROR'
+    assert event['event_type'] == event_type
+    assert event['status'] == Status.ERROR
     assert event['request_latency_ms'] == latency
     assert event['error_code'] == error_code
     assert event['product_id'] == product_id
@@ -106,7 +104,7 @@ def test_worker_produces_messages(mocker):
     mocker.patch('random.random', side_effect=[random.random(), 1] * max_messages)
     mocker.patch('uuid.uuid4', return_value=user_id)
     
-    mock_producer = mocker.MagicMock()
+    mock_producer = mocker.Mock()
     mocker.patch('producer.SerializingProducer', return_value=mock_producer, autospec=True)
     mock_producer.flush.return_value = 0
     
@@ -115,18 +113,26 @@ def test_worker_produces_messages(mocker):
     assert mock_producer.produce.call_count == max_messages
     
     calls_list = mock_producer.produce.call_args_list
-    assert all(call == mocker.call(topic=KAFKA_TOPIC, key=user_id, value=user_event, on_delivery=delivery_report) for call in calls_list)
+    assert all(
+        call == mocker.call(
+            topic=KAFKA_TOPIC,
+            key=user_id,
+            value=user_event,
+            on_delivery=delivery_report
+        )
+        for call in calls_list
+    )
     
     first_call_args = calls_list[0]
     assert first_call_args.kwargs['topic'] == KAFKA_TOPIC
     assert first_call_args.kwargs['key'] == user_id
-    assert first_call_args.kwargs['value'] == {'event_id': 'test-event'}
+    assert first_call_args.kwargs['value'] == user_event
     assert first_call_args.kwargs['on_delivery'] is not None
 
 
 def test_worker_polls_and_handles_buffer_error(mocker):
     """Test that the worker polls correctly and handles BufferError."""
-    mock_producer = mocker.MagicMock()
+    mock_producer = mocker.Mock()
     mock_producer.produce.side_effect = [None, BufferError]
     mocker.patch('producer.SerializingProducer', return_value=mock_producer)
     mock_producer.flush.return_value = 0
@@ -145,10 +151,10 @@ def test_worker_polls_and_handles_buffer_error(mocker):
 
 def test_worker_survives_serialization_error_and_logs_exception(mocker):
     """Verify that, given a ValueSerializationError, the worker logs the exception and gracefully finishes its execution loop without crashing."""
-    mock_producer = mocker.MagicMock()
+    mock_producer = mocker.Mock()
     mocker.patch('producer.SerializingProducer', return_value=mock_producer)
     mocker.patch('producer.generate_event', return_value={'event_id': 'bad-data'})
-    mock_producer.produce.side_effect = ValueSerializationError("Invalid Avro schema")
+    mock_producer.produce.side_effect = ValueSerializationError('Invalid Avro schema')
     mock_producer.flush.return_value = 0
     logger_exception_mock = mocker.patch('producer.logger.exception')
     
@@ -166,7 +172,7 @@ def test_worker_survives_serialization_error_and_logs_exception(mocker):
 
 def test_worker_survives_kafka_exception_and_logs_it(mocker):
     """Verify that, given a KafkaException during produce, the worker logs the exception and continues without crashing."""
-    mock_producer = mocker.MagicMock()
+    mock_producer = mocker.Mock()
     mocker.patch('producer.SerializingProducer', return_value=mock_producer)
     mocker.patch('producer.generate_event', return_value={'event_id': 'event'})
     mock_producer.produce.side_effect = KafkaException("Broker is down")
@@ -184,10 +190,10 @@ def test_worker_survives_kafka_exception_and_logs_it(mocker):
 
 def test_worker_pauses_on_unexpected_exception(mocker):
     """Verify that, given an unexpected RuntimeError, the worker logs the exception and pauses for 5 seconds, regardless of other pauses in the loop."""
-    mock_producer = mocker.MagicMock()
+    mock_producer = mocker.Mock()
     mocker.patch('producer.SerializingProducer', return_value=mock_producer)
     mocker.patch('producer.generate_event', return_value={'event_id': 'event'})
-    mock_producer.produce.side_effect = RuntimeError("Something completely unexpected happened")
+    mock_producer.produce.side_effect = RuntimeError('Something completely unexpected happened')
     mock_producer.flush.return_value = 0
     logger_exception_mock = mocker.patch('producer.logger.exception')
     
