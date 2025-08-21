@@ -13,6 +13,3 @@ class Event(TypedDict):
     status: str
     error_code: int | None
     product_id: int | None
-
-
-ClickHouse_Row = tuple[str, str, str, str, int, int, str, int | None, int | None]

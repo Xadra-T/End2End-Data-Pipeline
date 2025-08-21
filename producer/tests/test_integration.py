@@ -83,4 +83,5 @@ def test_producer_worker_sends_valid_avro_messages(clickhouse_client):
     assert 'event_id' in first_event
     assert isinstance(first_event['event_type'], str)
     assert first_event['status'] in {'SUCCESS', 'ERROR'}
+    
     clickhouse_client.command(f'TRUNCATE TABLE {TABLE}')

@@ -58,9 +58,6 @@ def generate_event(user_id: UUID, session_id: UUID) -> Event:
 def delivery_report(err: KafkaError | None, msg: Message) -> None:
     """Report delivery failures.
     
-    Delivery-report callback for Confluent's (Serializing)Producer.
-    Called once per message when it has been delivered to the broker (success) or failed (failure).
-    
     Args:
         err: KafkaError on failure; None on success.
         msg: The Message containing topic/partition/offset metadata (on success), and the original key/value.
@@ -70,10 +67,10 @@ def delivery_report(err: KafkaError | None, msg: Message) -> None:
             code = err.code()
             reason = err.str()
         except Exception:
-            code = "unknown"
+            code = 'unknown'
             reason = str(err)
         logger.error(
-            "Delivery failed: topic=%s partition=%s key=%s error_code=%s reason=%s",
+            'Delivery failed: topic=%s, partition=%s, key=%s, error_code=%s, reason=%s',
             msg.topic(),
             msg.partition(),
             msg.key(),
@@ -137,7 +134,7 @@ def worker(worker_id: int, max_messages: int | None = None) -> None:
 
 if __name__ == '__main__':
     logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+        level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         stream=sys.stdout,
     )
