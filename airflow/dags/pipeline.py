@@ -101,17 +101,17 @@ def on_failure_callback_func(context: dict[str, Any]) -> None:
     catchup=False,
     doc_md="""
     ### ETAR Pipeline
-    1. Extract data from ClickHouse for the previous minute and stream into MinIO.
-    2. Run Spark analysis.
+    1. Extract the previous minute data from ClickHouse and stream it into MinIO.
+    2. Analyze the data with Spark.
     3. Send the analysis result to the dashboard API.
     """,
     is_paused_upon_creation=False,
     fail_fast=True,
 )
 def etar_pipeline() -> None:
-    """Extract-Transform-Analysis-Report Pipeline:
-        1- Extract data from ClickHouse for the previous minute and stream into MinIO as a Parquet file
-        2- Trigger Spark analysis
+    """Extract-Transform-Analyze-Report Pipeline:
+        1- Stream the previous minute data from ClickHouse into MinIO as a Parquet file.
+        2- Trigger Spark analysis.
         3- Report the result back to the dashboard.
     """
     
