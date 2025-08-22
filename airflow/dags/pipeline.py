@@ -1,5 +1,3 @@
-# ruff: noqa: D205, D208, D400, D415, S608
-
 from __future__ import annotations
 import json
 import logging
@@ -52,7 +50,6 @@ MINIO_BUCKET_NAME = os.environ['MINIO_BUCKET_NAME']
 
 
 def get_minio_client() -> Minio:
-    logger.info("Retrieving MinIO client.")
     minio_conn = BaseHook.get_connection(MINIO_CONN_NAME)
     minio_client = Minio(
         endpoint=minio_conn.extra_dejson.get('host').replace('http://', ''),
@@ -129,7 +126,6 @@ def etar_pipeline() -> None:
             MinIO path of the file or the timestamp converted to string.
         
         """
-        logger.info("Retrieving ClickHouse connection from Airflow's metadata database.")
         ch_conn = BaseHook.get_connection(CLICKHOUSE_CONN_NAME)
         clickhouse_client = clickhouse_connect.get_client(
             host=ch_conn.host,
@@ -140,10 +136,7 @@ def etar_pipeline() -> None:
         )
         
         timestamp = data_interval_start.astimezone(ZoneInfo('Asia/Tehran')).replace(second=0, microsecond=0) - timedelta(minutes=1)
-        logger.info('Timestamp after tz: %s', timestamp)
-        
         timestamp_str = timestamp.strftime('%Y-%m-%d_%H-%M')
-        logger.info('Processing %s', timestamp_str)
         s3_path = f's3a://{MINIO_BUCKET_NAME}/{timestamp_str}'
         
         table = os.environ['CLICKHOUSE_TABLE']
@@ -152,7 +145,11 @@ def etar_pipeline() -> None:
         with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp_file:
             writer = None
             try:
-                with clickhouse_client.query_df_stream(query=query, parameters={'table': table, 'timestamp': timestamp}, settings={'max_block_size': 100000}) as stream:  # 100k rows; query_df_stream uses Native (bytes) or Arrow
+                with clickhouse_client.query_df_stream(
+                    query=query,
+                    parameters={'table': table, 'timestamp': timestamp},
+                    settings={'max_block_size': 100000}
+                ) as stream:
                     for df_chunk in stream:
                         n = len(df_chunk)
                         if n == 0:
@@ -211,7 +208,6 @@ def etar_pipeline() -> None:
             'spark.hadoop.fs.s3a.connection.ssl.enabled': 'false',
             'spark.eventLog.enabled': os.environ['SPARK_EVENT_LOG_ENABLED'],
             'spark.eventLog.dir': '/opt/airflow/logs/spark',
-            
         },
         driver_memory='512m',
         executor_memory='512m',
@@ -232,7 +228,6 @@ def etar_pipeline() -> None:
             JSONDecodeError: If the file contains invalid JSON.
             RequestException: If the dashboard API request fails.
         """
-        logger.info(' log Dashboard task- file_path: %s', file_path)
         if 'parquet' in file_path:
             file_path = file_path.replace('parquet', 'json')
         else:
@@ -243,11 +238,8 @@ def etar_pipeline() -> None:
         minio_response = None
         try:
             minio_response = minio_client.get_object(bucket_name=MINIO_BUCKET_NAME, object_name=file_name)
-            logger.info('Dashboard task try - minio_response: %s', minio_response)
             result = json.loads(minio_response.read())
-            logger.info('Dashboard task try - result: %s', result)
             dashboard_response = requests.post(url='http://dashboard-api:8080/report', json=result)
-            logger.info('Dashboard task try - dashboard_response: %s', dashboard_response)
             dashboard_response.raise_for_status()
         except S3Error:
             logger.exception('Failed to fetch %s from MinIO', file_name)
@@ -265,7 +257,7 @@ def etar_pipeline() -> None:
             if minio_response:
                 minio_response.close()
                 minio_response.release_conn()
-        
+    
     file_path >> spark_analysis >> send_to_dashboard(file_path=file_path)
 
 
