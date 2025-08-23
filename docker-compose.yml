@@ -31,6 +31,7 @@ x-airflow-common:
     AIRFLOW_UID: ${AIRFLOW_UID}
     AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: 'Asia/Tehran'
     _PIP_ADDITIONAL_REQUIREMENTS: ''
+    DASHBOARD_API_URL: http://dashboard-api:8080/report
   image: lp/airflow
   networks:
       - lp

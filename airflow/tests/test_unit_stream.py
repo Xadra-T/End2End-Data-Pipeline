@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import Mock
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -11,7 +11,6 @@ import pyarrow as pa
 import pytest
 import pyarrow.parquet as pq
 from airflow.hooks.base import BaseHook
-from airflow.sdk import Connection
 from clickhouse_connect.driver.client import Client
 from minio import Minio
 from pyarrow.parquet import ParquetWriter
@@ -34,18 +33,18 @@ df_chunk = pd.DataFrame({
 })
 
 
-def test_stream_from_clickhouse_to_minio_with_data(mocker, stream_func, mock_ch_conn, mock_df_stream):
+def test_stream_from_clickhouse_to_minio_with_data(mocker, stream_func, mock_df_stream, mock_ch_conn):
     """Test stream_from_clickhouse_to_minio handles data streaming, Parquet writing, and MinIO upload."""
     mock_ch_client = mock_df_stream([df_chunk])
     
-    mock_namedtemp = mocker.patch('tempfile.NamedTemporaryFile')
+    mock_namedtemp = mocker.patch('pipeline.tempfile.NamedTemporaryFile')
     tempfile_name = '/tmp/test.parquet'
     mock_namedtemp.return_value.__enter__.return_value.name = tempfile_name
     
-    mock_writer = MagicMock(spec=ParquetWriter)
-    mocker.patch('pyarrow.parquet.ParquetWriter', return_value=mock_writer)
+    mock_writer = Mock(spec=ParquetWriter)
+    mocker.patch('pipeline.pq.ParquetWriter', return_value=mock_writer)
     
-    mock_minio_client = MagicMock(spec=Minio)
+    mock_minio_client = Mock(spec=Minio)
     mocker.patch('pipeline.get_minio_client', return_value=mock_minio_client)
     
     data_interval_start = date_time + timedelta(minutes=1)
@@ -58,7 +57,7 @@ def test_stream_from_clickhouse_to_minio_with_data(mocker, stream_func, mock_ch_
     )
     
     mock_writer.write_table.assert_called_once()
-    written_table = mock_writer.write_table.call_args[0][0]
+    written_table = mock_writer.write_table.call_args[1]['table']
     assert written_table.schema == schema
     
     date_time_str = date_time.astimezone(ZoneInfo('Asia/Tehran')).strftime('%Y-%m-%d_%H-%M')
@@ -71,18 +70,11 @@ def test_stream_from_clickhouse_to_minio_with_data(mocker, stream_func, mock_ch_
     assert result == f's3a://{MINIO_BUCKET_NAME}/{date_time_str}.parquet'
 
 
-def test_stream_from_clickhouse_to_minio_no_data(mocker, stream_func, mock_ch_conn, mock_df_stream):
+def test_stream_from_clickhouse_to_minio_no_data(mocker, stream_func, mock_df_stream, mock_ch_conn):
     """Test stream_from_clickhouse_to_minio handles no data case without upload."""
-    
     mock_ch_client = mock_df_stream([])
     
-    mock_namedtemp = mocker.patch('tempfile.NamedTemporaryFile')
-    tempfile_name = '/tmp/test.parquet'
-    mock_namedtemp.return_value.__enter__.return_value.name = tempfile_name
-    
-    mocker.patch('pyarrow.parquet.ParquetWriter')
-    
-    mock_minio = MagicMock(spec=Minio)
+    mock_minio = Mock(spec=Minio)
     mocker.patch('pipeline.get_minio_client', return_value=mock_minio)
     
     data_interval_start = datetime(2025, 8, 10, 8, 31, 0, tzinfo=ZoneInfo('UTC'))
@@ -96,10 +88,7 @@ def test_stream_from_clickhouse_to_minio_no_data(mocker, stream_func, mock_ch_co
 
 def test_stream_from_clickhouse_to_minio_exception(mocker, stream_func):
     """Test stream_from_clickhouse_to_minio raises exception on failure."""
-    mock_ch_conn = MagicMock(spec=Connection)
-    mocker.patch.object(BaseHook, 'get_connection', return_value=mock_ch_conn)
-    
-    mock_ch_client = MagicMock(spec=Client)
+    mock_ch_client = Mock(spec=Client)
     mock_ch_client.query_df_stream.side_effect = ValueError('Query failed')
     
     mocker.patch('clickhouse_connect.get_client', return_value=mock_ch_client)
@@ -113,7 +102,6 @@ def test_stream_from_clickhouse_to_minio_exception(mocker, stream_func):
 def test_error_propagation(mocker, stream_func) -> None:
     """Test that errors are properly propagated through the pipeline."""
     err_msg = 'Connection not found'
-    
     mocker.patch.object(BaseHook, 'get_connection', side_effect=Exception(err_msg))
     
     with pytest.raises(Exception) as exc_info:
@@ -122,14 +110,14 @@ def test_error_propagation(mocker, stream_func) -> None:
     assert err_msg in str(exc_info.value)
 
 
-def test_data_transformation_in_stream(mocker, stream_func, mock_ch_conn, mock_df_stream):
+def test_data_transformation_in_stream(mocker, stream_func, mock_df_stream, mock_ch_conn):
     """Test that data transformations are applied correctly."""
     chunk1 = df_chunk.copy()
     chunk2 = df_chunk.copy()
     chunk2['event_id'] = [uuid4()]
     mock_df_stream([chunk1, chunk2])
     
-    mock_minio_client = MagicMock(spec=Minio)
+    mock_minio_client = Mock(spec=Minio)
     mocker.patch('pipeline.get_minio_client', return_value=mock_minio_client)
     
     mock_namedtemp = mocker.patch('tempfile.NamedTemporaryFile')
@@ -137,13 +125,13 @@ def test_data_transformation_in_stream(mocker, stream_func, mock_ch_conn, mock_d
     mock_namedtemp.return_value.__enter__.return_value.name = tempfile_name
     
     written_tables = []
-    mock_writer_instance = MagicMock(spec=pq.ParquetWriter)
+    mock_writer_instance = Mock(spec=pq.ParquetWriter)
     mock_writer_instance.write_table.side_effect = lambda table: written_tables.append(table)
-    mock_writer_class = mocker.patch('pyarrow.parquet.ParquetWriter', return_value=mock_writer_instance)
+    mock_writer_class = mocker.patch('pipeline.pq.ParquetWriter', return_value=mock_writer_instance)
     
     result = stream_func(data_interval_start=date_time + timedelta(minutes=1))
     
-    mock_writer_class.assert_called_once_with(tempfile_name, schema=schema)
+    mock_writer_class.assert_called_once_with(where=tempfile_name, schema=schema)
     
     assert len(written_tables) == 2
     assert mock_writer_instance.write_table.call_count == 2
@@ -175,18 +163,15 @@ def test_data_transformation_in_stream(mocker, stream_func, mock_ch_conn, mock_d
     assert result == f's3a://{MINIO_BUCKET_NAME}/{expected_filename}.parquet'
 
 
-def test_stream_from_clickhouse_to_minio_empty_chunk(mocker, stream_func, mock_ch_conn, mock_df_stream):
+def test_stream_from_clickhouse_to_minio_empty_chunk(mocker, stream_func, mock_df_stream, mock_ch_conn):
     """Test stream_from_clickhouse_to_minio handles empty DataFrame correctly."""
     empty_df = pd.DataFrame(columns=df_chunk.columns)
     mock_df_stream([empty_df])
     
-    mock_namedtemp = mocker.patch('tempfile.NamedTemporaryFile')
-    mock_namedtemp.return_value.__enter__.return_value.name = '/tmp/test.parquet'
+    mock_writer = Mock(spec=pq.ParquetWriter)
+    mocker.patch('pipeline.pq.ParquetWriter', return_value=mock_writer)
     
-    mock_writer = MagicMock(spec=pq.ParquetWriter)
-    mocker.patch('pyarrow.parquet.ParquetWriter', return_value=mock_writer)
-    
-    mock_minio_client = MagicMock(spec=Minio)
+    mock_minio_client = Mock(spec=Minio)
     mocker.patch('pipeline.get_minio_client', return_value=mock_minio_client)
     
     data_interval_start = date_time + timedelta(minutes=1)

@@ -25,13 +25,14 @@ def test_dag_is_present(dagbag):
 
 def test_tasks_are_present(dagbag):
     """Verify 'clickHouse_pyspark_dashboard' tasks are present."""
-    dag = dagbag.dags.get('clickHouse_pyspark_dashboard')
+    dag_id = 'clickHouse_pyspark_dashboard'
+    dag = dagbag.dags.get(dag_id)
     tasks = {t.task_id for t in dag.tasks}
     assert tasks == {
         'stream_from_clickhouse_to_minio',
         'spark_analysis',
         'send_to_dashboard',
-    }, f"Found these tasks for 'clickHouse_pyspark_dashboard': [{tasks}]"
+    }, f"Found these tasks for '{dag_id}': [{tasks}]"
 
 
 def test_upstream_and_downstream_relations(dagbag):

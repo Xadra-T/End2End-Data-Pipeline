@@ -93,7 +93,7 @@ def on_failure_callback_func(context: dict[str, Any]) -> None:
     start_date=datetime(2025, 8, 9, tzinfo=ZoneInfo('UTC')),
     default_args={
         'retries': 1,
-        'retry_delay': timedelta(seconds=10),
+        'retry_delay': timedelta(seconds=3),
         'on_success_callback': on_success_callback_func,
         'on_failure_callback': on_failure_callback_func,
     },
@@ -142,7 +142,7 @@ def etar_pipeline() -> None:
         table = os.environ['CLICKHOUSE_TABLE']
         query = 'SELECT * FROM %(table)s WHERE event_minute = %(timestamp)s;'
         total_rows = 0
-        with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp_file:
+        with tempfile.NamedTemporaryFile(suffix='.parquet') as tmp_file:
             writer = None
             try:
                 with clickhouse_client.query_df_stream(
@@ -163,10 +163,10 @@ def etar_pipeline() -> None:
                         df_chunk['event_timestamp'] = df_chunk['event_timestamp'].dt.floor('s')
                         
                         if writer is None:
-                            writer = pq.ParquetWriter(tmp_file.name, schema=schema)
+                            writer = pq.ParquetWriter(where=tmp_file.name, schema=schema)
                         
-                        table = pa.Table.from_pandas(df_chunk, schema=schema)
-                        writer.write_table(table)
+                        table = pa.Table.from_pandas(df=df_chunk, schema=schema)
+                        writer.write_table(table=table)
                 if writer:
                     writer.close()
             except Exception:
@@ -200,7 +200,7 @@ def etar_pipeline() -> None:
         application_args=[file_path],
         deploy_mode='client',
         conf={
-            'spark.hadoop.fs.s3a.endpoint': 'http://minio:9000',
+            'spark.hadoop.fs.s3a.endpoint': f'{{{{ conn.{MINIO_CONN_NAME}.extra_dejson.get("host") }}}}',
             'spark.hadoop.fs.s3a.access.key': f'{{{{ conn.{MINIO_CONN_NAME}.login }}}}',
             'spark.hadoop.fs.s3a.secret.key': f'{{{{ conn.{MINIO_CONN_NAME}.password }}}}',
             'spark.hadoop.fs.s3a.path.style.access': 'true',
@@ -239,7 +239,7 @@ def etar_pipeline() -> None:
         try:
             minio_response = minio_client.get_object(bucket_name=MINIO_BUCKET_NAME, object_name=file_name)
             result = json.loads(minio_response.read())
-            dashboard_response = requests.post(url='http://dashboard-api:8080/report', json=result)
+            dashboard_response = requests.post(url=os.environ['DASHBOARD_API_URL'], json=result)
             dashboard_response.raise_for_status()
         except S3Error:
             logger.exception('Failed to fetch %s from MinIO', file_name)
