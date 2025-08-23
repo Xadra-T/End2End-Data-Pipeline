@@ -1,9 +1,10 @@
 import io
 import json
+import logging
 import os
 import time
 import sys
-import logging
+from typing import Any, Dict
 
 from minio import Minio
 from pyspark.sql import SparkSession
@@ -13,8 +14,12 @@ from pyspark.sql import functions as F
 logger = logging.getLogger(__name__)
 
 
-def analyze_events(spark: SparkSession, file_path: str):
-    """Read a Parquet file from S3, perform analysis, write the result to MinIO and return results."""
+def analyze_events(spark: SparkSession, file_path: str) -> Dict[str, Any]:
+    """Read a Parquet file from S3, perform analysis and return results.
+    
+    Returns:
+        Analysis result.
+    """
     logger.debug('Starting analysis for %s', file_path)
     result = dict()
     df = spark.read.parquet(file_path).cache()
@@ -46,6 +51,7 @@ def analyze_events(spark: SparkSession, file_path: str):
 
 
 def main() -> None:
+    """Run the analysis on the given Parquet file path and save the result to MinIO."""
     spark = SparkSession.builder.appName('EventAnalysis').getOrCreate()
     
     if len(sys.argv) != 2:
