@@ -20,12 +20,9 @@ def analyze_events(spark: SparkSession, file_path: str) -> Dict[str, Any]:
     Returns:
         Analysis result.
     """
-    logger.debug('Starting analysis for %s', file_path)
-    result = dict()
+    result = {}
     df = spark.read.parquet(file_path).cache()
     result['total_events'] = df.count()
-    
-    logger.debug('Read %d rows from %s', result['total_events'], file_path)
     
     status_counts_df = (
         df.groupBy('event_type')
@@ -34,7 +31,7 @@ def analyze_events(spark: SparkSession, file_path: str) -> Dict[str, Any]:
         .fillna(0)
     ).orderBy('event_type')
     error_count = status_counts_df.select(F.sum('ERROR')).first()[0]
-    result['total_errors'] = int(error_count) if error_count is not None else 0
+    result['total_errors'] = int(error_count) if error_count else 0
     
     event_type_stats = {}
     for row in status_counts_df.collect():
@@ -46,7 +43,6 @@ def analyze_events(spark: SparkSession, file_path: str) -> Dict[str, Any]:
     result['by_event_type'] = event_type_stats
     
     df.unpersist()
-    logger.debug("Analysis finished successfully.")
     return result
 
 
@@ -55,7 +51,7 @@ def main() -> None:
     spark = SparkSession.builder.appName('EventAnalysis').getOrCreate()
     
     if len(sys.argv) != 2:
-        logger.error('Usage: spark_analysis.py <s3a_file_path>')
+        logger.error('Error in calling spark.py. Usage: spark.py <s3a_file_path>')
         spark.stop()
         sys.exit(-1)
     
@@ -71,7 +67,7 @@ def main() -> None:
     file_name = file_path.split(os.sep)[-1]
     
     if 'parquet' not in file_name:
-        logger.debug('Empty file for spark: %s', file_name)
+        logger.info('Empty file for spark: %s', file_name)
         analysis_result = json.dumps({'report': f'No data for {file_name}.'})
         file_name += '.json'
         spark.stop()
@@ -92,7 +88,6 @@ def main() -> None:
         analysis_result['file_name'] = file_name
         analysis_result = {'report': analysis_result}
         analysis_result = json.dumps(analysis_result)
-        logger.debug('Final result: %s', analysis_result)
     
     minio_client.put_object(
         bucket_name=bucket_name,
