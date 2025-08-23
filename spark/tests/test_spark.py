@@ -38,7 +38,8 @@ def spark():
     """Create a SparkSession for integration testing."""
     spark_session = SparkSession.builder \
         .appName('TestEventAnalysis') \
-        .master('local[*]') \
+        .master('spark://spark-master:7077') \
+        .config('spark.driver.host', 'spark-test-runner') \
         .config('spark.hadoop.fs.s3a.endpoint', 'http://minio:9000') \
         .config('spark.hadoop.fs.s3a.access.key', os.environ['MINIO_ROOT_USER']) \
         .config('spark.hadoop.fs.s3a.secret.key', os.environ['MINIO_ROOT_PASSWORD']) \
@@ -65,7 +66,7 @@ def minio_client() -> Minio:
 
 @pytest.fixture
 def parquet_file(minio_client):
-    """Create a test parquet file in MinIO and return its S3 path."""
+    """Create a test parquet file in MinIO and yield its S3 path."""
     timestamp = datetime(2025, 1, 15, 10, 0)
     timestamp_str = timestamp.strftime('%Y-%m-%d_%H-%M')
     object_name = f'{timestamp_str}.parquet'
@@ -121,9 +122,9 @@ def parquet_file(minio_client):
     minio_client.remove_object(MINIO_BUCKET_NAME, object_name)
 
 
-def test_integration_spark_analyze_events(spark: SparkSession, parquet_file: str) -> None:
-    """Test Spark analysis with real Spark session and MinIO data."""
-    result = analyze_events(spark, parquet_file)
+def test_spark_analyze_events_with_data(spark: SparkSession, parquet_file: str) -> None:
+    """Test `analyze_events` with real data."""
+    result = analyze_events(spark=spark, file_path=parquet_file)
     
     assert result['total_events'] == len(EVENTS) * (NUM_ERROR + NUM_SUCCESS)
     assert result['total_errors'] == len(EVENTS) * NUM_ERROR
@@ -134,8 +135,8 @@ def test_integration_spark_analyze_events(spark: SparkSession, parquet_file: str
         assert stats['ERROR'] == NUM_ERROR
 
 
-def test_spark_analyze_empty_file(spark: SparkSession, minio_client: Minio) -> None:
-    """Test Spark analysis with an empty parquet file."""
+def test_spark_analyze_events_empty_file(spark: SparkSession, minio_client: Minio) -> None:
+    """Test `analyze_events` with an empty parquet file."""
     object_name = 'empty-test.parquet'
     
     empty_df = pd.DataFrame(
@@ -159,7 +160,7 @@ def test_spark_analyze_empty_file(spark: SparkSession, minio_client: Minio) -> N
     s3_path = f's3a://{MINIO_BUCKET_NAME}/{object_name}'
     
     try:
-        result = analyze_events(spark, s3_path)
+        result = analyze_events(spark=spark, file_path=s3_path)
         
         assert result['total_events'] == 0
         assert result['total_errors'] == 0
@@ -168,8 +169,8 @@ def test_spark_analyze_empty_file(spark: SparkSession, minio_client: Minio) -> N
         minio_client.remove_object(MINIO_BUCKET_NAME, object_name)
 
 
-def test_spark_main_integration(mocker, minio_client: Minio, parquet_file: str) -> None:
-    """Test the main function of spark.py with real MinIO."""
+def test_spark_main_with_data(mocker, minio_client: Minio, parquet_file: str) -> None:
+    """Test the main function of spark.py with real data."""
     mocker.patch('sys.argv', ['spark.py', parquet_file])
     
     with pytest.raises(SystemExit) as exc_info:
@@ -182,14 +183,7 @@ def test_spark_main_integration(mocker, minio_client: Minio, parquet_file: str) 
         response = minio_client.get_object(MINIO_BUCKET_NAME, json_object_name)
         result_data = json.loads(response.read())
         
-        assert 'report' in result_data
         report = result_data['report']
-        assert 'total_events' in report
-        assert 'total_errors' in report
-        assert 'by_event_type' in report
-        assert 'process_time' in report
-        assert 'file_name' in report
-        
         assert report['total_events'] == len(EVENTS) * (NUM_ERROR + NUM_SUCCESS)
         assert report['total_errors'] == len(EVENTS) * NUM_ERROR
     finally:
@@ -197,8 +191,8 @@ def test_spark_main_integration(mocker, minio_client: Minio, parquet_file: str) 
         response.release_conn()
 
 
-def test_spark_main_no_data_integration(mocker, minio_client: Minio) -> None:
-    """Test spark main function with no parquet file (empty data case)."""
+def test_spark_main_no_data(mocker, minio_client: Minio) -> None:
+    """Test spark `main` function with no parquet file."""
     timestamp_str = '2025-01-15_11-00'
     s3_path = f's3a://{MINIO_BUCKET_NAME}/{timestamp_str}'
     

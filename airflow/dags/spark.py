@@ -14,7 +14,7 @@ from pyspark.sql import functions as F
 logger = logging.getLogger(__name__)
 
 
-def analyze_events(spark: SparkSession, file_path: str) -> Dict[str, Any]:
+def analyze_events(*, spark: SparkSession, file_path: str) -> Dict[str, Any]:
     """Read a Parquet file from S3, perform analysis and return results.
     
     Returns:
