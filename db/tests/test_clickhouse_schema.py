@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import os
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from socket import gaierror
 
@@ -13,7 +16,7 @@ CLICKHOUSE_TABLE = os.environ['CLICKHOUSE_TABLE']
 
 
 @pytest.fixture(scope='module')
-def clickhouse_client() -> Client:
+def clickhouse_client() -> Iterator[Client]:
     """Establish a connection to ClickHouse.
     
     Yields:
