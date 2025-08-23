@@ -3,6 +3,7 @@ from unittest.mock import Mock
 
 import requests
 
+from common import SAMPLE_REPORT_WITH_DATA
 from dashboard_ui import prepare_timestamp, fetch_report, prepare_no_data
 
 
@@ -20,7 +21,7 @@ def test_prepare_timestamp() -> None:
 
 
 def test_prepare_no_data() -> None:
-    """Test that prepare_no_data correctly formats a 'no data' message into a user-friendly string."""
+    """Test that prepare_no_data correctly formats the incoming report into a user-friendly message."""
     report   = 'No data for 2025-08-04_19-04.json'
     expected = 'No data for 2025/08/04 19:04'
     
@@ -31,12 +32,12 @@ def test_prepare_no_data() -> None:
 
 def test_fetch_report_success(mocker) -> None:
     """Test that fetch_report handles a successful API response and returns the JSON data."""
-    report = {'report': {'total_events': 100}}
+    report = SAMPLE_REPORT_WITH_DATA
     
     mock_response = Mock()
     mock_response.status_code = HTTPStatus.OK
     mock_response.json.return_value = report
-    mock_get = mocker.patch('requests.get', return_value=mock_response)
+    mock_get = mocker.patch('dashboard_ui.requests.get', return_value=mock_response)
     
     result = fetch_report(url='http://test-url', timeout=TIMEOUT)
     
@@ -46,7 +47,7 @@ def test_fetch_report_success(mocker) -> None:
 
 def test_fetch_report_timeout(mocker) -> None:
     """Test that fetch_report handles a timeout exception and returns None."""
-    mock_get = mocker.patch('requests.get', side_effect=requests.Timeout)
+    mock_get = mocker.patch('dashboard_ui.requests.get', side_effect=requests.Timeout)
     
     result = fetch_report(url='http://test-url', timeout=TIMEOUT)
     
@@ -60,7 +61,7 @@ def test_fetch_report_404(mocker) -> None:
     mock_response.status_code = HTTPStatus.NOT_FOUND
     mock_response.json.return_value = {'detail': 'No report stored.'}
     mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(response=mock_response)
-    mock_get = mocker.patch('requests.get', return_value=mock_response)
+    mock_get = mocker.patch('dashboard_ui.requests.get', return_value=mock_response)
     
     result = fetch_report(url='http://test-url', timeout=TIMEOUT)
     
@@ -73,7 +74,7 @@ def test_fetch_report_unexpected_http_error(mocker) -> None:
     mock_response = Mock()
     mock_response.status_code = HTTPStatus.INTERNAL_SERVER_ERROR
     mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(response=mock_response)
-    mock_get = mocker.patch('requests.get', return_value=mock_response)
+    mock_get = mocker.patch('dashboard_ui.requests.get', return_value=mock_response)
     
     result = fetch_report(url='http://test-url', timeout=TIMEOUT)
     
@@ -83,7 +84,7 @@ def test_fetch_report_unexpected_http_error(mocker) -> None:
 
 def test_fetch_report_network_error(mocker) -> None:
     """Test that fetch_report handles a general network error and returns None."""
-    mock_get = mocker.patch('requests.get', side_effect=requests.RequestException('Network error'))
+    mock_get = mocker.patch('dashboard_ui.requests.get', side_effect=requests.RequestException('Network error'))
     
     result = fetch_report(url='http://test-url', timeout=TIMEOUT)
     

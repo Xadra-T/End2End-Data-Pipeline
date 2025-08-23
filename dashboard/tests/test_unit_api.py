@@ -1,8 +1,11 @@
+import os
+
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from dashboard_api import app, NO_REPORT_STORED, storage
+from common import SAMPLE_REPORT_WITH_DATA
+from dashboard_api import app, NO_REPORT_STORED
 
 
 @pytest.fixture
@@ -12,14 +15,16 @@ def client() -> TestClient:
 
 
 @pytest.fixture(autouse=True)
-def clear_storage() -> None:
+def clear_storage(client: TestClient) -> None:
     """Clear the storage before each test to ensure isolation."""
-    storage.clear()
+    client.delete(os.environ['REPORT_URL'])
+    health_response = client.get(os.environ['HEALTH_URL'])
+    assert health_response.json()['reports_count'] == 0, 'Storage is not cleared!'
 
 
 def test_receive_report(client: TestClient) -> None:
-    """Test that posting a report stores it correctly and returns 200."""
-    report_data = {'report': {'total_events': 100}}
+    """Test posting a report stores it correctly and returns 200."""
+    report_data = SAMPLE_REPORT_WITH_DATA
     
     response = client.post('/report', json=report_data)
     
@@ -28,10 +33,9 @@ def test_receive_report(client: TestClient) -> None:
 
 
 def test_get_report(client: TestClient) -> None:
-    """Test that getting a report returns the stored data correctly."""
-    report_data = {'report': {'total_events': 100}}
-    
-    storage.append(report_data)
+    """Test getting a report returns the stored report correctly."""
+    report_data = SAMPLE_REPORT_WITH_DATA
+    response = client.post('/report', json=report_data)
     
     response = client.get('/report')
     
@@ -40,7 +44,7 @@ def test_get_report(client: TestClient) -> None:
 
 
 def test_get_report_no_data(client: TestClient) -> None:
-    """Test that getting a report with no data returns 404 with the correct detail."""
+    """Test getting a report with no data returns 404 with the correct detail."""
     response = client.get('/report')
     
     assert response.status_code == status.HTTP_404_NOT_FOUND

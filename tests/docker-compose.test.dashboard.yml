@@ -33,7 +33,8 @@ services:
       dashboard-api:
         condition: service_healthy
     environment:
-      REPORTS_URL: http://dashboard-api:8080/report
+      REPORT_URL: http://dashboard-api:8080/report
+      HEALTH_URL: http://dashboard-api:8080/health
     image: lp/test-dashboard-api
     hostname: dashboard-api-test
     networks:

@@ -1,21 +1,31 @@
 from __future__ import annotations
 
+import os
 from http import HTTPStatus
+from typing import TYPE_CHECKING
 
 import pytest
 import requests
 
+from common import SAMPLE_REPORT_WITH_DATA
 from dashboard_api import NO_REPORT_STORED
 
 
-API_BASE_URL = 'http://dashboard-api:8080'
-HEALTH_URL = f'{API_BASE_URL}/health'
-REPORT_URL = f'{API_BASE_URL}/report'
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
+REPORT_URL = os.environ['REPORT_URL']
+HEALTH_URL = os.environ['HEALTH_URL']
 
 
 @pytest.fixture
-def api_client():
-    """Provide a requests session for making API calls."""
+def api_client() -> Iterator[requests.Session]:
+    """Provide a requests session for making API calls.
+    
+    Yields:
+        An initialized requests session object.
+    """
     with requests.Session() as session:
         yield session
 
@@ -35,6 +45,10 @@ def test_get_report_when_storage_is_empty(api_client: requests.Session) -> None:
     Scenario: The UI starts before any report has been sent.
     Behavior: The API should return a 404 Not Found.
     """
+    api_client.delete(REPORT_URL)
+    health_response = api_client.get(HEALTH_URL)
+    assert health_response.json()['reports_count'] == 0
+    
     response = api_client.get(REPORT_URL)
     
     assert response.status_code == HTTPStatus.NOT_FOUND
@@ -47,24 +61,12 @@ def test_post_and_get_valid_data_report(api_client: requests.Session) -> None:
     Scenario: Airflow posts a valid analysis report. The UI then fetches it.
     Behavior: The API should store the report and return it on a subsequent GET request.
     """
-    report_data = {
-        "report": {
-            "total_events": 5,
-            "total_errors": 1,
-            "by_event_type": {
-                "ADD_TO_CART": {"SUCCESS": 4, "ERROR": 1}
-            },
-            "process_time": 22.16,
-            "file_name": "2025-08-04_19-04.json"
-        }
-    }
-    
-    post_response = api_client.post(REPORT_URL, json=report_data)
+    post_response = api_client.post(REPORT_URL, json=SAMPLE_REPORT_WITH_DATA)
     assert post_response.status_code == HTTPStatus.OK
     
     get_response = api_client.get(REPORT_URL)
     assert get_response.status_code == HTTPStatus.OK
-    assert get_response.json() == report_data
+    assert get_response.json() == SAMPLE_REPORT_WITH_DATA
 
 
 def test_post_and_get_no_data_report(api_client: requests.Session) -> None:

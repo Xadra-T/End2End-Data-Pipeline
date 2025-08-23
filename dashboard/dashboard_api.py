@@ -87,13 +87,8 @@ async def health_check() -> dict[str, Any]:
     return {'status': 'healthy', 'reports_count': len(storage)}
 
 
-# This is for testability (airflow test_integration_dashboard.py)
+# This is for testability (airflow test_integration_report.py)
 @app.delete('/report')
-def clear_storage() -> dict[str, str]:
-    """Endpoint to clear storage between tests.
-    
-    Returns:
-        Status of the storage.
-    """
+def clear_storage() -> None:
+    """Endpoint to clear storage between tests."""
     storage.clear()
-    return {'status': 'cleared'}
