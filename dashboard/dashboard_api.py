@@ -24,24 +24,26 @@ class AnalysisReport(BaseModel):
 async def receive_report(report: AnalysisReport) -> None:
     """Enpoint for Airflow to push analysis reports.
     
-    Examples of a report:
-    Case 1: Data:
-        {
-            'total_events': 5805,
-            'total_errors': 1398,
-            'by_event_type': {
-                'ADD_TO_CART': {'SUCCESS': 876, 'ERROR': 292},
-                'CHECKOUT': {'SUCCESS': 846, 'ERROR': 289},
-                'PAYMENT': {'SUCCESS': 884, 'ERROR': 281},
-                'SEARCH': {'SUCCESS': 933, 'ERROR': 261},
-                'VIEW_PRODUCT': {'SUCCESS': 868, 'ERROR': 275}
-            },
-                
-            'process_time': 22.15983009338379,
-            'file_name': '2025-08-04_19-04.json'
-        }
-    Case 2: No Data:
-        No data for 2025-08-04_19-04.json.
+    Cases of a report:
+        Case 1: Data:
+            {'report': {
+                    'total_events': 5805,
+                    'total_errors': 1398,
+                    'by_event_type': {
+                        'ADD_TO_CART': {'SUCCESS': 876, 'ERROR': 292},
+                        'CHECKOUT': {'SUCCESS': 846, 'ERROR': 289},
+                        'PAYMENT': {'SUCCESS': 884, 'ERROR': 281},
+                        'SEARCH': {'SUCCESS': 933, 'ERROR': 261},
+                        'VIEW_PRODUCT': {'SUCCESS': 868, 'ERROR': 275}
+                    },
+                        
+                    'process_time': 22.15983009338379,
+                    'file_name': '2025-08-04_19-04.json'
+                }
+            }
+        
+        Case 2: No Data:
+            {'report': 'No data for 2025-08-04_19-04.json.'}
     
     Args:
         report: Analysis report.
@@ -65,7 +67,7 @@ async def get_report() -> AnalysisReport:
         The most recent report.
     
     Raises:
-        HTTPException: with a 404 status code if no valid reports exist in storage.
+        HTTPException: If no valid reports exist in storage. The status code is HTTP_404_NOT_FOUND.
     """
     print('Got request to send the most recent report')
     if storage:

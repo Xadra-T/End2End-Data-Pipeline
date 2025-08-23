@@ -20,7 +20,7 @@ def prepare_timestamp(*, file_path: str) -> str:
         file_path: Path of the file.
     
     Returns:
-        Timestamp format.
+        Desired timestamp format.
     """
     return (
         file_path
@@ -66,7 +66,7 @@ def fetch_report(*, url: str, timeout: int) -> dict[str, Any] | None:
 def show_report(*, report: dict[str, Any]) -> None:
     """Display a bar chart and summary stats for an analysis report.
     
-    Example of input:
+    Sample report:
     {
         'total_events': 5805,
         'total_errors': 1398,
@@ -144,27 +144,8 @@ def prepare_no_data(*, report: str) -> str:
 def prepare_report(*, report: str | dict[str, Any]) -> None:
     """Prepare output based on incoming report.
     
-    Examples of a report:
-    Case 1: Data:
-        {
-            'report': {
-                'total_events': 5805,
-                'total_errors': 1398,
-                'by_event_type': {
-                    'ADD_TO_CART': {'SUCCESS': 876, 'ERROR': 292},
-                    'CHECKOUT': {'SUCCESS': 846, 'ERROR': 289},
-                    'PAYMENT': {'SUCCESS': 884, 'ERROR': 281},
-                    'SEARCH': {'SUCCESS': 933, 'ERROR': 261},
-                    'VIEW_PRODUCT': {'SUCCESS': 868, 'ERROR': 275}
-                },
-                    
-                'process_time': 22.15983009338379,
-                'file_name': '2025-08-04_19-04.json'
-            }
-            
-        }
-    Case 2: No Data:
-        {'report': 'No data for 2025-08-04_19-04.'}
+    Args:
+        report: Analysis report.
     """
     report = report['report']
     if isinstance(report, str):
