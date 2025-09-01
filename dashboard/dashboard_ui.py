@@ -106,17 +106,17 @@ def show_report(*, report: dict[str, Any]) -> None:
         height = bar.get_height()
         ax.annotate(
             f'{height:,}', xy=(bar.get_x() + bar.get_width() / 2, height),
-            xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=9, color='#4CAF50'
+            xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=7, color='#4CAF50'
         )
     for bar in bars2:
         height = bar.get_height()
         ax.annotate(
             f'{height:,}', xy=(bar.get_x() + bar.get_width() / 2, height),
-            xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=9, color='#FF5252'
+            xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=7, color='#FF5252'
         )
     
     ax.set_xticks(n)
-    ax.set_xticklabels(event_types, rotation=0, color='white', fontsize=10)
+    ax.set_xticklabels(event_types, rotation=0, color='white', fontsize=7)
     ax.set_ylabel('Count', color='white')
     ax.tick_params(axis='y', colors='white')
     ax.legend(facecolor='#222', edgecolor='white', labelcolor='white', bbox_to_anchor=(1.1, 1))
@@ -131,7 +131,11 @@ def show_report(*, report: dict[str, Any]) -> None:
     timestamp = prepare_timestamp(file_path=report['file_name'])
     summary_text = f'{total_events}    |    {total_errors}    |    Timestamp: {timestamp}'
     ax.text(0.5, -0.18, summary_text, ha='center', va='top', fontsize=14, color='#FFD600', transform=ax.transAxes)
-    ax.text(0.5, -0.38, f'Spark process took {report["process_time"]:.2f} seconds.', ha='center', va='top', fontsize=14, color='#FFD600', transform=ax.transAxes)
+    ax.text(
+        0.5, -0.38,
+        f'Spark process took {report["process_time"]:.2f} seconds.', ha='center',
+        va='top', fontsize=14, color='#FFD600', transform=ax.transAxes
+    )
     
     st.pyplot(fig)
 
