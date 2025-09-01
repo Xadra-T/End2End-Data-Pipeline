@@ -116,7 +116,7 @@ def show_report(*, report: dict[str, Any]) -> None:
         )
     
     ax.set_xticks(n)
-    ax.set_xticklabels(event_types, rotation=0, color='white', fontsize=7)
+    ax.set_xticklabels([event_type.replace('_', ' ').title() for event_type in event_types], rotation=0, color='white', fontsize=7)
     ax.set_ylabel('Count', color='white')
     ax.tick_params(axis='y', colors='white')
     ax.legend(facecolor='#222', edgecolor='white', labelcolor='white', bbox_to_anchor=(1.1, 1))
