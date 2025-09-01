@@ -1,4 +1,6 @@
-![Overview of the architecture](Pipeline.png)
+![Overview of the architecture](images/Pipeline.png)
+![Sample of the dashboard report](images/Chart.png)
+![Sample of the Airflow UI](images/Airflow_UI.png)
 # Goal
 This project demonstrates an end-to-end data pipeline that simulates, ingests, analyzes, and visualizes user interaction events in near real-time.
 <br/> <br/>
