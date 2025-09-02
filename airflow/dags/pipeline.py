@@ -4,7 +4,8 @@ import logging
 import os
 import tempfile
 from datetime import datetime, timedelta
-from typing import Any, TYPE_CHECKING
+from typing import Any
+from uuid import UUID
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
 except ImportError:
@@ -21,10 +22,8 @@ from dotenv import load_dotenv
 from minio import Minio
 from minio.error import S3Error
 
-if TYPE_CHECKING:
-    from uuid import UUID
-    row_type = tuple[UUID, UUID, UUID, str, datetime, int, str, int | None, int | None]
 
+row_type = tuple[UUID, UUID, UUID, str, datetime, int, str, int | None, int | None]
 
 load_dotenv()
 

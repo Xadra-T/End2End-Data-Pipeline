@@ -1,18 +1,14 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from http import HTTPStatus
-from typing import TYPE_CHECKING
 
 import pytest
 import requests
 
 from common import SAMPLE_REPORT_WITH_DATA
 from dashboard_api import NO_REPORT_STORED
-
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 
 REPORT_URL = os.environ['REPORT_URL']

@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
 from uuid import UUID
 
 from confluent_kafka import avro
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer, AvroDeserializer
+from confluent_kafka.serialization import SerializationContext
 from dotenv import load_dotenv
-
-if TYPE_CHECKING:
-    from confluent_kafka.serialization import SerializationContext
 
 
 def uuid_serializer(uuid_obj: UUID, _: SerializationContext | None) -> bytes | None:

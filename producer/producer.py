@@ -7,18 +7,14 @@ import sys
 import time
 import uuid
 from multiprocessing import Process
-from typing import TYPE_CHECKING
 from uuid import UUID
 
+from confluent_kafka import Message
 from confluent_kafka.error import KafkaError, KafkaException, ValueSerializationError
 from confluent_kafka.serializing_producer import SerializingProducer
 
 from config import EVENT_INTERVAL_SECONDS, Events, Status, NUM_WORKERS, NEW_USER_SESSION_PROBABILITY, PRODUCER_CONF, KAFKA_TOPIC
-
-if TYPE_CHECKING:
-    from confluent_kafka import Message
-    
-    from custom_types import Event
+from custom_types import Event
 
 
 logger = logging.getLogger(__name__)
