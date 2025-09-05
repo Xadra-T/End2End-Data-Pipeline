@@ -28,15 +28,8 @@ row_type = tuple[UUID, UUID, UUID, str, datetime, int, str, int | None, int | No
 load_dotenv()
 
 schema = pa.schema([
-    pa.field('event_id', pa.string()),
-    pa.field('user_id', pa.string()),
-    pa.field('session_id', pa.string()),
     pa.field('event_type', pa.string()),
-    pa.field('event_timestamp', pa.timestamp('ms', tz='Asia/Tehran')),
-    pa.field('request_latency_ms', pa.int32()),
     pa.field('status', pa.string()),
-    pa.field('error_code', pa.int32(), nullable=True),
-    pa.field('product_id', pa.int32(), nullable=True),
 ])
 
 logger = logging.getLogger(__name__)
@@ -139,7 +132,7 @@ def etar_pipeline() -> None:
         s3_path = f's3a://{MINIO_BUCKET_NAME}/{timestamp_str}'
         
         table = os.environ['CLICKHOUSE_TABLE']
-        query = 'SELECT * FROM %(table)s WHERE event_minute = %(timestamp)s;'
+        query = 'SELECT event_type, status FROM %(table)s WHERE event_minute = %(timestamp)s;'
         total_rows = 0
         with tempfile.NamedTemporaryFile(suffix='.parquet') as tmp_file:
             writer = None
@@ -154,12 +147,6 @@ def etar_pipeline() -> None:
                         if n == 0:
                             break
                         total_rows += n
-                        
-                        uuid_columns = ['event_id', 'user_id', 'session_id']
-                        for col in uuid_columns:
-                            df_chunk[col] = df_chunk[col].astype(str)
-                        
-                        df_chunk['event_timestamp'] = df_chunk['event_timestamp'].dt.floor('s')
                         
                         if writer is None:
                             writer = pq.ParquetWriter(where=tmp_file.name, schema=schema)

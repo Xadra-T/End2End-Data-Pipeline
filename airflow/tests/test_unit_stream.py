@@ -21,15 +21,8 @@ from pipeline import schema
 
 date_time = datetime(2025, 8, 10, 12, 0, tzinfo=ZoneInfo('UTC'))
 df_chunk = pd.DataFrame({
-    'event_id': [uuid4()],
-    'user_id': [uuid4()],
-    'session_id': [uuid4()],
     'event_type': ['VIEW_PRODUCT'],
-    'event_timestamp': [pd.Timestamp(date_time)],
-    'request_latency_ms': [100],
     'status': ['SUCCESS'],
-    'error_code': [None],
-    'product_id': [1230],
 })
 
 
@@ -51,7 +44,7 @@ def test_stream_from_clickhouse_to_minio_with_data(mocker, stream_func, mock_df_
     result = stream_func(data_interval_start=data_interval_start)
     
     mock_ch_client.query_df_stream.assert_called_once_with(
-        query='SELECT * FROM %(table)s WHERE event_minute = %(timestamp)s;',
+        query='SELECT event_type, status FROM %(table)s WHERE event_minute = %(timestamp)s;',
         parameters={'table': os.environ['CLICKHOUSE_TABLE'], 'timestamp': date_time},
         settings={'max_block_size': 100000}
     )
@@ -114,7 +107,7 @@ def test_data_transformation_in_stream(mocker, stream_func, mock_df_stream, mock
     """Test that data transformations are applied correctly."""
     chunk1 = df_chunk.copy()
     chunk2 = df_chunk.copy()
-    chunk2['event_id'] = [uuid4()]
+    chunk2['status'] = ['ERROR']
     mock_df_stream([chunk1, chunk2])
     
     mock_minio_client = Mock(spec=Minio)
@@ -136,20 +129,10 @@ def test_data_transformation_in_stream(mocker, stream_func, mock_df_stream, mock
     assert len(written_tables) == 2
     assert mock_writer_instance.write_table.call_count == 2
     
-    for written_table in written_tables:
-        assert written_table.column('event_id').type == pa.string()
-        assert written_table.column('user_id').type == pa.string()
-        assert written_table.column('session_id').type == pa.string()
-        
-        timestamp_values = written_table.column('event_timestamp').to_pylist()
-        assert len(timestamp_values) == 1
-        assert timestamp_values[0].microsecond == 0
-        assert timestamp_values[0].second == 0
-        
-        assert written_table.column('event_type').to_pylist()[0] == df_chunk['event_type'].iloc[0]
-        assert written_table.column('request_latency_ms').to_pylist()[0] == df_chunk['request_latency_ms'].iloc[0]
-        assert written_table.column('product_id').to_pylist()[0] == df_chunk['product_id'].iloc[0]
-        
+    for written_table, chunk in zip(written_tables, [chunk1, chunk2]):
+        assert written_table.column('status').type == pa.string()
+        assert written_table.column('event_type').to_pylist()[0] == chunk['event_type'].iloc[0]
+        assert written_table.column('status').to_pylist()[0] == chunk['status'].iloc[0]
         assert written_table.schema == schema
         
     expected_filename = date_time.astimezone(ZoneInfo('Asia/Tehran')).strftime('%Y-%m-%d_%H-%M')
