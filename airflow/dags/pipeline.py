@@ -2,7 +2,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import tempfile
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -13,15 +12,16 @@ except ImportError:
 
 import clickhouse_connect
 import pyarrow as pa
+import pyarrow.fs as fs
 import pyarrow.parquet as pq
 import requests
 from airflow.hooks.base import BaseHook
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.sdk import dag, task
+from clickhouse_connect.driver.exceptions import ClickHouseError
 from dotenv import load_dotenv
 from minio import Minio
 from minio.error import S3Error
-
 
 row_type = tuple[UUID, UUID, UUID, str, datetime, int, str, int | None, int | None]
 
@@ -109,7 +109,7 @@ def etar_pipeline() -> None:
     
     @task
     def stream_from_clickhouse_to_minio(data_interval_start: datetime) -> str:
-        """Stream data from ClickHouse to MinIO, return the s3a file path if there were any data stored, otherwise return the file name.
+        """Stream data from ClickHouse to MinIO, return the s3a file path if a Parquet file was stored, otherwise return the file name.
         
         Args:
             data_interval_start: Task start time. Comes from Airflow.
@@ -117,6 +117,9 @@ def etar_pipeline() -> None:
         Returns:
             MinIO path of the file or the timestamp converted to string.
         
+        Raises:
+            ClickHouseError: If ClickHouse error happens.
+            S3Error: If MinIO error happens.
         """
         ch_conn = BaseHook.get_connection(CLICKHOUSE_CONN_NAME)
         clickhouse_client = clickhouse_connect.get_client(
@@ -127,55 +130,57 @@ def etar_pipeline() -> None:
             database=ch_conn.schema,
         )
         
+        minio_conn = BaseHook.get_connection(MINIO_CONN_NAME)
+        s3_fs = fs.S3FileSystem(
+            access_key=minio_conn.login,
+            secret_key=minio_conn.password,
+            endpoint_override=minio_conn.extra_dejson['host']
+        )
+        
         timestamp = data_interval_start.astimezone(ZoneInfo('Asia/Tehran')).replace(second=0, microsecond=0) - timedelta(minutes=1)
         timestamp_str = timestamp.strftime('%Y-%m-%d_%H-%M')
-        s3_path = f's3a://{MINIO_BUCKET_NAME}/{timestamp_str}'
+        parquet_path = f'{MINIO_BUCKET_NAME}/{timestamp_str}.parquet'
         
         table = os.environ['CLICKHOUSE_TABLE']
         query = 'SELECT event_type, status FROM %(table)s WHERE event_minute = %(timestamp)s;'
         total_rows = 0
-        with tempfile.NamedTemporaryFile(suffix='.parquet') as tmp_file:
-            writer = None
-            try:
-                with clickhouse_client.query_df_stream(
+        try:
+            with (
+                s3_fs.open_output_stream(path=parquet_path) as s3_stream,
+                pq.ParquetWriter(where=s3_stream, schema=schema) as writer,
+                clickhouse_client.query_df_stream(
                     query=query,
                     parameters={'table': table, 'timestamp': timestamp},
                     settings={'max_block_size': 100000}
-                ) as stream:
-                    for df_chunk in stream:
-                        n = len(df_chunk)
-                        if n == 0:
-                            break
-                        total_rows += n
-                        
-                        if writer is None:
-                            writer = pq.ParquetWriter(where=tmp_file.name, schema=schema)
-                        
-                        table = pa.Table.from_pandas(df=df_chunk, schema=schema)
-                        writer.write_table(table=table)
-                if writer:
-                    writer.close()
-            except Exception:
-                logger.exception('Unexpected error occured. Failed to fetch data from ClickHouse or write to temp file.')
-                raise
-            
-            if total_rows == 0:
-                logger.warning('No data found for minute: %s.', timestamp_str)
-                return s3_path
-            
-            logger.info('Number of rows written: %d', total_rows)
-            
-            minio_client = get_minio_client()
-            obj_name = f'{timestamp_str}.parquet'
-            minio_client.fput_object(
-                bucket_name=MINIO_BUCKET_NAME,
-                object_name=obj_name,
-                file_path=tmp_file.name,
-            )
-            full_path = s3_path + '.parquet'
-            logger.info('Successfully uploaded Parquet file to %s', full_path)
+                ) as ch_stream
+            ):
+                for df_chunk in ch_stream:
+                    if df_chunk.empty:
+                        break
+                    total_rows += len(df_chunk)
+                    
+                    table = pa.Table.from_pandas(df=df_chunk, schema=schema, preserve_index=False)
+                    writer.write_table(table=table)
+        except ClickHouseError:
+            logger.exception('ClickHouse error occurred while streaming from ClickHouse to MinIO.')
+            raise
+        except S3Error:
+            logger.exception('MinIO error occured while streaming from ClickHouse to MinIO.')
+            raise
+        except Exception:
+            logger.exception('Unexpected error occured while streaming from ClickHouse to MinIO.')
+            raise
+        finally:
+            clickhouse_client.close()
         
-        return full_path
+        if total_rows == 0:
+            logger.warning('No data found for minute: %s.', timestamp_str)
+            s3_fs.delete_file(parquet_path)
+            return 's3a://' + parquet_path.replace('.parquet', '')
+        
+        logger.info('Successfully uploaded Parquet file to %s. Number of rows written: %d', parquet_path, total_rows)
+        
+        return 's3a://' + parquet_path
     
     file_path = stream_from_clickhouse_to_minio()
     

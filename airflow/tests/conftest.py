@@ -1,13 +1,10 @@
 import logging
-import sys
 from datetime import datetime
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import clickhouse_connect
 import pytest
-from airflow.hooks.base import BaseHook
-from airflow.sdk import Connection
 from minio import Minio
 from minio.deleteobjects import DeleteObject
 from minio.error import S3Error
@@ -44,36 +41,11 @@ def stream_func(dag):
 
 
 @pytest.fixture
-def mock_ch_conn(mocker) -> Mock:
-    """Mock ClickHouse connection and patch `get_connection` with it.
-    
-    This fixture does not need to be called in the body of the test; just needs to be initialized (done by fdefault by pytest) to patch the object.
-    (This only effects tests that explicitly request it as a parameter.)
-    """
-    mock_conn = Mock(spec=Connection)
-    mock_conn.host = CLICKHOUSE_HOST
-    mock_conn.port = CLICKHOUSE_PORT
-    mock_conn.login = CLICKHOUSE_USER
-    mock_conn.password = CLICKHOUSE_PASSWORD
-    mock_conn.schema = CLICKHOUSE_DB
-    mocker.patch.object(BaseHook, 'get_connection', return_value=mock_conn)
-    return mock_conn
-
-
-@pytest.fixture
-def mock_df_stream(mocker):
-    def inner(data):
-        mock_yielded_data = MagicMock()
-        mock_yielded_data.__iter__.return_value = iter(data)
-        
-        mock_ctx_manager = MagicMock()
-        mock_ctx_manager.__enter__.return_value = mock_yielded_data
-        mock_ch_client = MagicMock()
-        mock_ch_client.query_df_stream.return_value = mock_ctx_manager
-        mocker.patch('clickhouse_connect.get_client', return_value=mock_ch_client, autospec=True)
-        return mock_ch_client
-    
-    return inner
+def mock_ch_client(mocker):
+    """Mock ClickHouse client."""
+    mock_client = Mock()
+    mocker.patch('pipeline.clickhouse_connect.get_client', return_value=mock_client)
+    return mock_client
 
 
 @pytest.fixture
